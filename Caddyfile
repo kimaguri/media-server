@@ -1,0 +1,34 @@
+lampa.sadmin.app {
+    handle /sonarr* {
+        reverse_proxy sonarr:8989
+    }
+    handle /radarr* {
+        reverse_proxy gluetun:7878
+    }
+    handle /prowlarr* {
+        reverse_proxy gluetun:9696
+    }
+    handle /bazarr* {
+        reverse_proxy bazarr:6767
+    }
+    handle /seerr* {
+        reverse_proxy seerr:5055
+    }
+    handle /deleterr* {
+        reverse_proxy deleterr:8082
+    }
+
+    redir /qbt /qbt/ 301
+    handle_path /qbt/* {
+        reverse_proxy qbittorrent:8080
+    }
+
+    redir /torrserver /torrserver/ 301
+    handle_path /torrserver/* {
+        reverse_proxy torrserver:8090
+    }
+
+    handle / {
+        respond "Media Server OK" 200
+    }
+}

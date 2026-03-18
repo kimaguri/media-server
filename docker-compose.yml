@@ -1,0 +1,171 @@
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER}
+      - VPN_TYPE=${VPN_TYPE:-wireguard}
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY:-}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES:-}
+      - SERVER_COUNTRIES=${SERVER_COUNTRIES:-Netherlands}
+      - FREE_ONLY=${FREE_ONLY:-off}
+      - OPENVPN_USER=${OPENVPN_USER:-}
+      - OPENVPN_PASSWORD=${OPENVPN_PASSWORD:-}
+      - TZ=${TZ}
+      - UPDATER_PERIOD=24h
+    ports:
+      - 127.0.0.1:9696:9696
+      - 127.0.0.1:7878:7878
+    volumes:
+      - ./config/gluetun:/gluetun
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    network_mode: "service:gluetun"
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ./config/prowlarr:/config
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    restart: unless-stopped
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    network_mode: "service:gluetun"
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ./config/radarr:/config
+      - ./movies:/movies
+      - ./downloads:/downloads
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    restart: unless-stopped
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - WEBUI_PORT=8080
+    volumes:
+      - ./config/qbittorrent:/config
+      - ./downloads:/downloads
+    ports:
+      - 127.0.0.1:8080:8080
+      - 6881:6881
+      - 6881:6881/udp
+    restart: unless-stopped
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ./config/sonarr:/config
+      - ./tv:/tv
+      - ./downloads:/downloads
+    ports:
+      - 127.0.0.1:8989:8989
+    restart: unless-stopped
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ./config/bazarr:/config
+      - ./tv:/tv
+      - ./movies:/movies
+    ports:
+      - 127.0.0.1:6767:6767
+    restart: unless-stopped
+
+  sportarr:
+    image: sportarr/sportarr:latest
+    container_name: sportarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ./config/sportarr:/config
+      - ./sports:/sports
+      - ./downloads:/downloads
+    ports:
+      - 127.0.0.1:1867:1867
+    restart: unless-stopped
+
+  torrserver:
+    image: ghcr.io/yourok/torrserver:latest
+    container_name: torrserver
+    environment:
+      - TS_PORT=8090
+      - TS_HTTPAUTH=false
+    volumes:
+      - ./config/torrserver:/opt/ts
+    ports:
+      - 8090:8090
+    restart: unless-stopped
+
+  seerr:
+    image: ghcr.io/seerr-team/seerr:latest
+    container_name: seerr
+    init: true
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - ./config/seerr:/app/config
+    ports:
+      - 127.0.0.1:5055:5055
+    restart: unless-stopped
+
+  deleterr:
+    image: ghcr.io/rfsbraz/deleterr:latest
+    container_name: deleterr
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - ./config/deleterr:/config
+    ports:
+      - 127.0.0.1:8082:8082
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - ./config/caddy/Caddyfile:/etc/caddy/Caddyfile
+      - ./config/caddy/data:/data
+      - ./config/caddy/config:/config
+    restart: unless-stopped
