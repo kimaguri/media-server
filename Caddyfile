@@ -1,3 +1,4 @@
+# Services with native URL Base support — path-based on main domain
 lampa.sadmin.app {
     handle /sonarr* {
         reverse_proxy sonarr:8989
@@ -11,25 +12,26 @@ lampa.sadmin.app {
     handle /bazarr* {
         reverse_proxy bazarr:6767
     }
-    redir /jellyseerr /jellyseerr/ 301
-    handle_path /jellyseerr/* {
-        reverse_proxy jellyseerr:5055
+    handle /jellyfin* {
+        reverse_proxy jellyfin:8096
     }
     handle /deleterr* {
         reverse_proxy deleterr:8082
     }
-
-    redir /qbt /qbt/ 301
-    handle_path /qbt/* {
-        reverse_proxy qbittorrent:8080
-    }
-
-    redir /torrserver /torrserver/ 301
-    handle_path /torrserver/* {
-        reverse_proxy torrserver:8090
-    }
-
     handle / {
         respond "Media Server OK" 200
     }
+}
+
+# Services WITHOUT URL Base support — subdomains
+js.lampa.sadmin.app {
+    reverse_proxy jellyseerr:5055
+}
+
+qbt.lampa.sadmin.app {
+    reverse_proxy qbittorrent:8080
+}
+
+ts.lampa.sadmin.app {
+    reverse_proxy torrserver:8090
 }
