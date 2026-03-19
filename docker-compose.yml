@@ -158,6 +158,52 @@ services:
       - 127.0.0.1:8082:8082
     restart: unless-stopped
 
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - ./config/jellyfin:/config
+      - ./movies:/movies:ro
+      - ./tv:/tv:ro
+    ports:
+      - 127.0.0.1:8096:8096
+    restart: unless-stopped
+
+  media-init:
+    build: ./init
+    container_name: media-init
+    environment:
+      - TZ=${TZ}
+      - QB_PASSWORD=${QB_PASSWORD:-changeme}
+      - RUTRACKER_USERNAME=${RUTRACKER_USERNAME:-}
+      - RUTRACKER_PASSWORD=${RUTRACKER_PASSWORD:-}
+      - JELLYFIN_USER=${JELLYFIN_USER:-admin}
+      - JELLYFIN_PASSWORD=${JELLYFIN_PASSWORD:-changeme}
+    volumes:
+      - ./config/sonarr:/config/sonarr
+      - ./config/radarr:/config/radarr
+      - ./config/prowlarr:/config/prowlarr
+      - ./config/bazarr:/config/bazarr
+      - ./config/jellyfin:/config/jellyfin
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_started
+      sonarr:
+        condition: service_started
+      bazarr:
+        condition: service_started
+      seerr:
+        condition: service_started
+      jellyfin:
+        condition: service_started
+      caddy:
+        condition: service_started
+    restart: "no"
+
   caddy:
     image: caddy:2-alpine
     container_name: caddy

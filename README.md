@@ -74,6 +74,7 @@ Sonarr/Radarr мониторят → Prowlarr ищет на трекерах →
 | **TorrServer** | Стриминг торрентов. Lampa на телефоне/ТВ отправляет magnet-ссылку → TorrServer стримит видео в реальном времени без скачивания на диск | Нет |
 | **Seerr** | Веб-интерфейс для запросов контента. Удобный мобильный UI для добавления фильмов/сериалов в Sonarr/Radarr | Нет |
 | **Deleterr** | Автоудаление просмотренного контента. Читает Trakt.tv API, удаляет файлы после grace period | Нет |
+| **Jellyfin** | Медиа-сервер. Сканирует скачанные файлы, создаёт библиотеку с постерами/метаданными, стримит на устройства. Интеграция с Lampa через плагин | Нет |
 | **Caddy** | Reverse proxy с автоматическим HTTPS (Let's Encrypt). Все сервисы доступны через один домен | Нет |
 | **Sportarr** | Отслеживание спортивных трансляций (La Liga, Barcelona) | Нет |
 
@@ -194,28 +195,19 @@ nano config/caddy/Caddyfile
 
 ```bash
 docker compose up -d
-docker compose logs -f gluetun  # Дождаться "healthy"
+# Init-контейнер автоматически настроит все сервисы:
+# - URL Base для каждого сервиса
+# - qBittorrent: пути скачивания, категории
+# - Sonarr/Radarr: download client, root folders
+# - Prowlarr: индексеры (Nyaa.si, RuTracker), синхронизация с Sonarr/Radarr
+# - Bazarr: подключение к Sonarr/Radarr, языки
+# - Jellyfin: admin пользователь, библиотеки Movies/TV
+
+# После первого запуска перезапустить для применения URL Base:
+docker compose restart sonarr radarr prowlarr bazarr jellyfin
 ```
 
-### 5. Настройка URL Base
-
-В каждом *arr сервисе: Settings → General → URL Base:
-- Sonarr: `/sonarr`
-- Radarr: `/radarr`
-- Prowlarr: `/prowlarr`
-- Bazarr: в `config/bazarr/config/config.yaml` → `base_url: /bazarr`
-
-### 6. Связка сервисов
-
-**Prowlarr → Sonarr/Radarr:**
-- Settings → Apps → Add → Sonarr/Radarr с API ключами
-
-**Sonarr/Radarr → qBittorrent:**
-- Settings → Download Clients → qBittorrent (host: `qbittorrent`, port: `8080`)
-
-**Bazarr → Sonarr/Radarr:**
-- Settings → Sonarr (host: `sonarr`, port: `8989`)
-- Settings → Radarr (host: `gluetun`, port: `7878`)
+Все сервисы настраиваются автоматически через init-контейнер (`media-init`). Ручная настройка через UI не требуется.
 
 **Lampa → TorrServer:**
 - Settings → TorrServer → URL: `https://your-domain.com/torrserver/`
