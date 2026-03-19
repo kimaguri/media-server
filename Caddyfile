@@ -11,7 +11,8 @@ lampa.sadmin.app {
     handle /bazarr* {
         reverse_proxy bazarr:6767
     }
-    handle /seerr* {
+    redir /seerr /seerr/ 301
+    handle_path /seerr/* {
         reverse_proxy seerr:5055
     }
     handle /deleterr* {
@@ -26,10 +27,6 @@ lampa.sadmin.app {
     redir /torrserver /torrserver/ 301
     handle_path /torrserver/* {
         reverse_proxy torrserver:8090
-    }
-
-    handle /setup* {
-        reverse_proxy setup-wizard:8888
     }
 
     handle / {
