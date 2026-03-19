@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Media Server Setup</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .wizard {
+            width: 100%;
+            max-width: 580px;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            color: #888;
+            font-size: 14px;
+        }
+
+        /* Steps indicator */
+        .steps-indicator {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 32px;
+        }
+
+        .step-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #333;
+            transition: all 0.3s;
+        }
+
+        .step-dot.active {
+            background: #8b5cf6;
+            box-shadow: 0 0 8px rgba(139, 92, 246, 0.5);
+        }
+
+        .step-dot.done {
+            background: #22c55e;
+        }
+
+        /* Form card */
+        .card {
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 12px;
+            padding: 28px;
+            margin-bottom: 16px;
+        }
+
+        .card h2 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: #fff;
+        }
+
+        .card .subtitle {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        /* Form elements */
+        .field {
+            margin-bottom: 16px;
+        }
+
+        .field label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: #aaa;
+            margin-bottom: 6px;
+        }
+
+        .field input, .field select {
+            width: 100%;
+            padding: 10px 14px;
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 8px;
+            color: #fff;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .field input:focus, .field select:focus {
+            border-color: #8b5cf6;
+        }
+
+        .field input.valid {
+            border-color: #22c55e;
+        }
+
+        .field input.invalid {
+            border-color: #ef4444;
+        }
+
+        .field .hint {
+            font-size: 11px;
+            color: #555;
+            margin-top: 4px;
+        }
+
+        .field .error-msg {
+            font-size: 12px;
+            color: #ef4444;
+            margin-top: 4px;
+            display: none;
+        }
+
+        .field .error-msg.show {
+            display: block;
+        }
+
+        .optional-badge {
+            font-size: 11px;
+            color: #666;
+            background: #222;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-left: 6px;
+        }
+
+        /* Validation result */
+        .validation-result {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-top: 12px;
+            display: none;
+        }
+
+        .validation-result.show {
+            display: flex;
+        }
+
+        .validation-result.success {
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            color: #22c55e;
+        }
+
+        .validation-result.error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #ef4444;
+        }
+
+        .validation-result.info {
+            background: rgba(139, 92, 246, 0.1);
+            border: 1px solid rgba(139, 92, 246, 0.3);
+            color: #8b5cf6;
+        }
+
+        /* Buttons */
+        .buttons {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: #8b5cf6;
+            color: #fff;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #7c3aed;
+        }
+
+        .btn-secondary {
+            background: #222;
+            color: #aaa;
+            border: 1px solid #333;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #2a2a2a;
+        }
+
+        .btn-validate {
+            flex: 0;
+            white-space: nowrap;
+            padding: 10px 16px;
+            background: #1e1e3a;
+            color: #8b5cf6;
+            border: 1px solid #8b5cf630;
+            font-size: 13px;
+        }
+
+        .btn-validate:hover:not(:disabled) {
+            background: #2a2a4a;
+        }
+
+        .btn-deploy {
+            background: #22c55e;
+            color: #fff;
+            font-size: 16px;
+            padding: 14px;
+        }
+
+        .btn-deploy:hover:not(:disabled) {
+            background: #16a34a;
+        }
+
+        /* Spinner */
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #ffffff30;
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Progress bar */
+        .progress-container {
+            margin-top: 20px;
+        }
+
+        .progress-bar {
+            height: 6px;
+            background: #222;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #8b5cf6, #22c55e);
+            border-radius: 3px;
+            transition: width 0.5s ease;
+            width: 0%;
+        }
+
+        .progress-step {
+            font-size: 13px;
+            color: #888;
+        }
+
+        .deploy-logs {
+            margin-top: 16px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 12px;
+            background: #111;
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .deploy-logs .log-entry {
+            color: #666;
+            margin-bottom: 4px;
+        }
+
+        .deploy-logs .log-entry:last-child {
+            color: #8b5cf6;
+        }
+
+        /* Complete screen */
+        .complete-screen {
+            text-align: center;
+        }
+
+        .complete-screen .checkmark {
+            font-size: 64px;
+            margin-bottom: 16px;
+        }
+
+        .complete-screen h2 {
+            font-size: 24px;
+            color: #22c55e;
+            margin-bottom: 8px;
+        }
+
+        .services-list {
+            text-align: left;
+            margin-top: 20px;
+        }
+
+        .services-list a {
+            display: block;
+            padding: 10px 14px;
+            background: #111;
+            border-radius: 8px;
+            color: #8b5cf6;
+            text-decoration: none;
+            margin-bottom: 6px;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+
+        .services-list a:hover {
+            background: #1a1a2e;
+        }
+
+        .services-list a span {
+            color: #666;
+            float: right;
+        }
+
+        /* Step visibility */
+        .step { display: none; }
+        .step.active { display: block; }
+
+        /* Input row with validate button */
+        .input-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .input-row input {
+            flex: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="wizard">
+        <div class="header">
+            <h1>Media Server Setup</h1>
+            <p>Configure your media server in a few steps</p>
+        </div>
+
+        <div class="steps-indicator">
+            <div class="step-dot active" data-step="0"></div>
+            <div class="step-dot" data-step="1"></div>
+            <div class="step-dot" data-step="2"></div>
+            <div class="step-dot" data-step="3"></div>
+            <div class="step-dot" data-step="4"></div>
+        </div>
+
+        <!-- Step 1: VPN -->
+        <div class="step active" id="step-0">
+            <div class="card">
+                <h2>VPN Configuration</h2>
+                <p class="subtitle">For accessing blocked trackers (RuTracker, Nyaa.si)</p>
+
+                <div class="field">
+                    <label>VPN Provider</label>
+                    <select id="vpn_provider">
+                        <option value="protonvpn">ProtonVPN (Free)</option>
+                        <option value="mullvad">Mullvad</option>
+                        <option value="windscribe">Windscribe</option>
+                    </select>
+                </div>
+
+                <div class="field">
+                    <label>WireGuard Private Key</label>
+                    <div class="input-row">
+                        <input type="text" id="wireguard_key" placeholder="eGGEdhb...ZUc=" autocomplete="off">
+                        <button class="btn btn-validate" onclick="validateVPN()">Check</button>
+                    </div>
+                    <div class="hint">Get from VPN provider dashboard &rarr; WireGuard config &rarr; PrivateKey</div>
+                    <div class="error-msg" id="vpn-error"></div>
+                </div>
+
+                <div class="field">
+                    <label>Server Country</label>
+                    <select id="vpn_country">
+                        <option value="Netherlands">Netherlands</option>
+                        <option value="Germany">Germany</option>
+                        <option value="Finland">Finland</option>
+                        <option value="Sweden">Sweden</option>
+                    </select>
+                </div>
+
+                <div class="validation-result" id="vpn-result"></div>
+            </div>
+
+            <div class="buttons">
+                <button class="btn btn-primary" onclick="nextStep()" id="vpn-next" disabled>Next</button>
+            </div>
+        </div>
+
+        <!-- Step 2: RuTracker -->
+        <div class="step" id="step-1">
+            <div class="card">
+                <h2>RuTracker <span class="optional-badge">optional</span></h2>
+                <p class="subtitle">For searching Russian content. Skip if you don't have an account.</p>
+
+                <div class="field">
+                    <label>Username</label>
+                    <input type="text" id="rutracker_username" placeholder="your_username">
+                </div>
+
+                <div class="field">
+                    <label>Password</label>
+                    <div class="input-row">
+                        <input type="password" id="rutracker_password" placeholder="your_password">
+                        <button class="btn btn-validate" onclick="validateRutracker()">Check</button>
+                    </div>
+                </div>
+
+                <div class="validation-result" id="rutracker-result"></div>
+            </div>
+
+            <div class="buttons">
+                <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                <button class="btn btn-primary" onclick="nextStep()">Next</button>
+            </div>
+        </div>
+
+        <!-- Step 3: Passwords -->
+        <div class="step" id="step-2">
+            <div class="card">
+                <h2>Service Passwords</h2>
+                <p class="subtitle">Set passwords for qBittorrent and Jellyfin</p>
+
+                <div class="field">
+                    <label>qBittorrent Password</label>
+                    <input type="password" id="qb_password" placeholder="Minimum 8 characters" value="">
+                    <div class="error-msg" id="qb-error"></div>
+                </div>
+
+                <div class="field">
+                    <label>Jellyfin Username</label>
+                    <input type="text" id="jellyfin_user" value="admin">
+                </div>
+
+                <div class="field">
+                    <label>Jellyfin Password</label>
+                    <input type="password" id="jellyfin_password" placeholder="Minimum 8 characters" value="">
+                    <div class="error-msg" id="jf-error"></div>
+                </div>
+
+                <div class="field">
+                    <label>Timezone</label>
+                    <select id="timezone">
+                        <option value="Asia/Almaty">Asia/Almaty (UTC+5)</option>
+                        <option value="Europe/Moscow">Europe/Moscow (UTC+3)</option>
+                        <option value="Asia/Bishkek">Asia/Bishkek (UTC+6)</option>
+                        <option value="Asia/Tashkent">Asia/Tashkent (UTC+5)</option>
+                        <option value="Europe/Kiev">Europe/Kyiv (UTC+2)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="buttons">
+                <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                <button class="btn btn-primary" onclick="validatePasswords()" id="pass-next">Next</button>
+            </div>
+        </div>
+
+        <!-- Step 4: Telegram -->
+        <div class="step" id="step-3">
+            <div class="card">
+                <h2>Telegram Notifications <span class="optional-badge">optional</span></h2>
+                <p class="subtitle">Get notified when downloads complete</p>
+
+                <div class="field">
+                    <label>Bot Token</label>
+                    <div class="input-row">
+                        <input type="text" id="telegram_token" placeholder="123456:ABC-DEF...">
+                        <button class="btn btn-validate" onclick="validateTelegram()">Check</button>
+                    </div>
+                    <div class="hint">Create via @BotFather in Telegram &rarr; /newbot</div>
+                </div>
+
+                <div class="field">
+                    <label>Chat ID</label>
+                    <input type="text" id="telegram_chat_id" placeholder="Your numeric chat ID">
+                    <div class="hint">Send /start to your bot, then check https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</div>
+                </div>
+
+                <div class="validation-result" id="telegram-result"></div>
+            </div>
+
+            <div class="buttons">
+                <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                <button class="btn btn-primary" onclick="nextStep()">Next</button>
+            </div>
+        </div>
+
+        <!-- Step 5: Deploy -->
+        <div class="step" id="step-4">
+            <div class="card" id="deploy-card">
+                <h2>Ready to Deploy</h2>
+                <p class="subtitle">Review your configuration and start deployment</p>
+
+                <div id="config-summary" style="font-size: 13px; color: #888; margin-top: 12px;"></div>
+
+                <div class="buttons" id="deploy-buttons">
+                    <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                    <button class="btn btn-deploy" onclick="deploy()" id="deploy-btn">Deploy Media Server</button>
+                </div>
+
+                <div class="progress-container" id="progress-container" style="display:none;">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <div class="progress-step" id="progress-step">Starting...</div>
+                    <div class="deploy-logs" id="deploy-logs"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Complete -->
+        <div class="step" id="step-complete">
+            <div class="card complete-screen">
+                <div class="checkmark">&#10003;</div>
+                <h2>Media Server is Running!</h2>
+                <p class="subtitle" id="complete-message">All services configured and ready</p>
+
+                <div class="services-list" id="services-list">
+                    <a href="/seerr" target="_blank">Seerr <span>Add movies & shows</span></a>
+                    <a href="/sonarr" target="_blank">Sonarr <span>TV & Anime</span></a>
+                    <a href="/radarr" target="_blank">Radarr <span>Movies</span></a>
+                    <a href="/prowlarr" target="_blank">Prowlarr <span>Indexers</span></a>
+                    <a href="/qbt/" target="_blank">qBittorrent <span>Downloads</span></a>
+                    <a href="/bazarr" target="_blank">Bazarr <span>Subtitles</span></a>
+                    <a href="/jellyfin/" target="_blank">Jellyfin <span>Watch library</span></a>
+                    <a href="/torrserver/" target="_blank">TorrServer <span>Torrent streaming</span></a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentStep = 0;
+        const totalSteps = 5;
+        let vpnValidated = false;
+
+        function showStep(n) {
+            document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+            document.getElementById(`step-${n}`).classList.add('active');
+
+            document.querySelectorAll('.step-dot').forEach((dot, i) => {
+                dot.classList.remove('active', 'done');
+                if (i < n) dot.classList.add('done');
+                if (i === n) dot.classList.add('active');
+            });
+
+            if (n === 4) updateSummary();
+        }
+
+        function nextStep() {
+            if (currentStep < totalSteps - 1) {
+                currentStep++;
+                showStep(currentStep);
+            }
+        }
+
+        function prevStep() {
+            if (currentStep > 0) {
+                currentStep--;
+                showStep(currentStep);
+            }
+        }
+
+        function showResult(id, type, message) {
+            const el = document.getElementById(id);
+            el.className = `validation-result show ${type}`;
+            el.textContent = message;
+        }
+
+        async function validateVPN() {
+            const key = document.getElementById('wireguard_key').value.trim();
+            const provider = document.getElementById('vpn_provider').value;
+            const btn = document.querySelector('#step-0 .btn-validate');
+            const input = document.getElementById('wireguard_key');
+
+            if (!key) {
+                showResult('vpn-result', 'error', 'Enter your WireGuard Private Key');
+                input.classList.add('invalid');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span>';
+
+            try {
+                const res = await fetch('/api/validate/vpn', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ wireguard_private_key: key, provider })
+                });
+                const data = await res.json();
+
+                if (data.valid) {
+                    showResult('vpn-result', 'success', data.message);
+                    input.classList.remove('invalid');
+                    input.classList.add('valid');
+                    document.getElementById('vpn-next').disabled = false;
+                    vpnValidated = true;
+                } else {
+                    showResult('vpn-result', 'error', data.error);
+                    input.classList.add('invalid');
+                }
+            } catch (e) {
+                showResult('vpn-result', 'error', 'Connection error: ' + e.message);
+            }
+
+            btn.disabled = false;
+            btn.textContent = 'Check';
+        }
+
+        async function validateRutracker() {
+            const username = document.getElementById('rutracker_username').value.trim();
+            const password = document.getElementById('rutracker_password').value.trim();
+            const btn = document.querySelector('#step-1 .btn-validate');
+
+            if (!username || !password) {
+                showResult('rutracker-result', 'info', 'Leave empty to skip RuTracker');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span>';
+
+            try {
+                const res = await fetch('/api/validate/rutracker', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+
+                showResult('rutracker-result', data.valid ? 'success' : 'error', data.message || data.error);
+            } catch (e) {
+                showResult('rutracker-result', 'error', 'Connection error');
+            }
+
+            btn.disabled = false;
+            btn.textContent = 'Check';
+        }
+
+        function validatePasswords() {
+            const qbPass = document.getElementById('qb_password').value;
+            const jfPass = document.getElementById('jellyfin_password').value;
+            let valid = true;
+
+            if (qbPass.length < 8) {
+                document.getElementById('qb-error').textContent = 'Minimum 8 characters';
+                document.getElementById('qb-error').classList.add('show');
+                valid = false;
+            } else {
+                document.getElementById('qb-error').classList.remove('show');
+            }
+
+            if (jfPass.length < 8) {
+                document.getElementById('jf-error').textContent = 'Minimum 8 characters';
+                document.getElementById('jf-error').classList.add('show');
+                valid = false;
+            } else {
+                document.getElementById('jf-error').classList.remove('show');
+            }
+
+            if (valid) nextStep();
+        }
+
+        async function validateTelegram() {
+            const token = document.getElementById('telegram_token').value.trim();
+            const btn = document.querySelector('#step-3 .btn-validate');
+
+            if (!token) {
+                showResult('telegram-result', 'info', 'Skipping Telegram notifications');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span>';
+
+            try {
+                const res = await fetch('/api/validate/telegram', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ bot_token: token })
+                });
+                const data = await res.json();
+
+                showResult('telegram-result', data.valid ? 'success' : 'error', data.message || data.error);
+            } catch (e) {
+                showResult('telegram-result', 'error', 'Connection error');
+            }
+
+            btn.disabled = false;
+            btn.textContent = 'Check';
+        }
+
+        function updateSummary() {
+            const summary = document.getElementById('config-summary');
+            const items = [
+                `VPN: ${document.getElementById('vpn_provider').value} (${document.getElementById('vpn_country').value})`,
+                document.getElementById('rutracker_username').value ?
+                    `RuTracker: ${document.getElementById('rutracker_username').value}` : 'RuTracker: skipped',
+                `Timezone: ${document.getElementById('timezone').value}`,
+                document.getElementById('telegram_token').value ? 'Telegram: configured' : 'Telegram: skipped',
+                `Jellyfin user: ${document.getElementById('jellyfin_user').value}`
+            ];
+            summary.innerHTML = items.map(i => `<div style="padding:4px 0;border-bottom:1px solid #222">${i}</div>`).join('');
+        }
+
+        function getFormData() {
+            return {
+                vpn_provider: document.getElementById('vpn_provider').value,
+                wireguard_private_key: document.getElementById('wireguard_key').value.trim(),
+                vpn_country: document.getElementById('vpn_country').value,
+                free_only: 'on',
+                rutracker_username: document.getElementById('rutracker_username').value.trim(),
+                rutracker_password: document.getElementById('rutracker_password').value,
+                qb_password: document.getElementById('qb_password').value,
+                jellyfin_user: document.getElementById('jellyfin_user').value.trim(),
+                jellyfin_password: document.getElementById('jellyfin_password').value,
+                timezone: document.getElementById('timezone').value,
+                telegram_bot_token: document.getElementById('telegram_token').value.trim(),
+                telegram_chat_id: document.getElementById('telegram_chat_id').value.trim()
+            };
+        }
+
+        async function deploy() {
+            const btn = document.getElementById('deploy-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Deploying...';
+
+            document.getElementById('deploy-buttons').style.display = 'none';
+            document.getElementById('progress-container').style.display = 'block';
+
+            try {
+                await fetch('/api/deploy', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(getFormData())
+                });
+
+                // Poll for status
+                pollStatus();
+            } catch (e) {
+                document.getElementById('progress-step').textContent = 'Error: ' + e.message;
+            }
+        }
+
+        function pollStatus() {
+            const interval = setInterval(async () => {
+                try {
+                    const res = await fetch('/api/status');
+                    const data = await res.json();
+
+                    document.getElementById('progress-fill').style.width = data.progress + '%';
+                    document.getElementById('progress-step').textContent = data.step;
+
+                    const logsEl = document.getElementById('deploy-logs');
+                    logsEl.innerHTML = data.logs.map(l => `<div class="log-entry">${l}</div>`).join('');
+                    logsEl.scrollTop = logsEl.scrollHeight;
+
+                    if (data.status === 'complete') {
+                        clearInterval(interval);
+                        setTimeout(() => {
+                            showStep('complete');
+                            document.querySelectorAll('.step-dot').forEach(d => d.classList.add('done'));
+                        }, 1000);
+                    } else if (data.status === 'error') {
+                        clearInterval(interval);
+                        document.getElementById('progress-step').textContent = 'Error: ' + data.step;
+                    }
+                } catch (e) {}
+            }, 2000);
+        }
+
+        // Auto-validate WireGuard key format on input
+        document.getElementById('wireguard_key').addEventListener('input', function() {
+            const key = this.value.trim();
+            const valid = /^[A-Za-z0-9+/]{42,43}=$/.test(key);
+            this.classList.toggle('valid', valid && key.length > 0);
+            this.classList.toggle('invalid', !valid && key.length > 0);
+            if (valid) {
+                document.getElementById('vpn-next').disabled = false;
+            }
+        });
+
+        // Password real-time validation
+        ['qb_password', 'jellyfin_password'].forEach(id => {
+            document.getElementById(id).addEventListener('input', function() {
+                const errorId = id === 'qb_password' ? 'qb-error' : 'jf-error';
+                if (this.value.length >= 8) {
+                    document.getElementById(errorId).classList.remove('show');
+                    this.classList.remove('invalid');
+                    this.classList.add('valid');
+                } else if (this.value.length > 0) {
+                    this.classList.remove('valid');
+                    this.classList.add('invalid');
+                }
+            });
+        });
+    </script>
+</body>
+</html>

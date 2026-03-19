@@ -204,6 +204,19 @@ services:
         condition: service_started
     restart: "no"
 
+  setup-wizard:
+    build: ./wizard
+    container_name: setup-wizard
+    profiles: ["setup"]
+    environment:
+      - MEDIA_DIR=/opt/media
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/media:/opt/media
+    ports:
+      - 8888:8888
+    restart: "no"
+
   caddy:
     image: caddy:2-alpine
     container_name: caddy

@@ -28,6 +28,10 @@ lampa.sadmin.app {
         reverse_proxy torrserver:8090
     }
 
+    handle /setup* {
+        reverse_proxy setup-wizard:8888
+    }
+
     handle / {
         respond "Media Server OK" 200
     }
