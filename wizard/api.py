@@ -333,10 +333,47 @@ JELLYFIN_PASSWORD={data.get('jellyfin_password', 'changeme')}
                 break
             time.sleep(3)
 
-        # Step 6: Restart services for URL Base
-        update('Applying URL settings...', 90, 'Restarting services')
+        # Step 6: Disable auth wizards in *arr services
+        update('Configuring authentication...', 87, 'Setting up service auth')
+
+        for config_path, service_name in [
+            (os.path.join(MEDIA_DIR, 'config/sonarr/config.xml'), 'Sonarr'),
+            (os.path.join(MEDIA_DIR, 'config/radarr/config.xml'), 'Radarr'),
+            (os.path.join(MEDIA_DIR, 'config/prowlarr/config.xml'), 'Prowlarr'),
+        ]:
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    content = f.read()
+                # Set auth to Forms + DisabledForLocalAddresses (skips first-run wizard)
+                content = content.replace(
+                    '<AuthenticationMethod>None</AuthenticationMethod>',
+                    '<AuthenticationMethod>Forms</AuthenticationMethod>'
+                )
+                content = content.replace(
+                    '<AuthenticationRequired>Enabled</AuthenticationRequired>',
+                    '<AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>'
+                )
+                # If no auth method set yet, add it
+                if '<AuthenticationMethod>' not in content:
+                    content = content.replace(
+                        '</Config>',
+                        '  <AuthenticationMethod>Forms</AuthenticationMethod>\n  <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>\n</Config>'
+                    )
+                with open(config_path, 'w') as f:
+                    f.write(content)
+
+        # Step 7: Restore full Caddyfile and restart
+        update('Applying URL settings...', 90, 'Switching to production Caddy config')
+
+        # Copy full Caddyfile from repo
+        full_caddyfile = os.path.join(MEDIA_DIR, 'Caddyfile')
+        caddy_config = os.path.join(MEDIA_DIR, 'config/caddy/Caddyfile')
+        if os.path.exists(full_caddyfile):
+            import shutil
+            shutil.copy2(full_caddyfile, caddy_config)
+
         subprocess.run(
-            ['docker', 'compose', 'restart', 'sonarr', 'radarr', 'prowlarr', 'bazarr', 'jellyfin'],
+            ['docker', 'compose', 'restart', 'sonarr', 'radarr', 'prowlarr', 'bazarr', 'jellyfin', 'caddy'],
             cwd=MEDIA_DIR, capture_output=True, text=True, timeout=60
         )
         time.sleep(10)
