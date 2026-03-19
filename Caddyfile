@@ -11,9 +11,9 @@ lampa.sadmin.app {
     handle /bazarr* {
         reverse_proxy bazarr:6767
     }
-    redir /seerr /seerr/ 301
-    handle_path /seerr/* {
-        reverse_proxy seerr:5055
+    redir /jellyseerr /jellyseerr/ 301
+    handle_path /jellyseerr/* {
+        reverse_proxy jellyseerr:5055
     }
     handle /deleterr* {
         reverse_proxy deleterr:8082
