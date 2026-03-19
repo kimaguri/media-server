@@ -46,12 +46,14 @@ get_api_key() {
 # ============================================
 log "Starting media server auto-configuration..."
 
-wait_for_service "qBittorrent" "http://qbittorrent:8080"
-wait_for_service "Sonarr" "http://sonarr:8989/sonarr"
-wait_for_service "Radarr" "http://gluetun:7878/radarr"
-wait_for_service "Prowlarr" "http://gluetun:9696/prowlarr"
-wait_for_service "Bazarr" "http://bazarr:6767/bazarr"
-wait_for_service "Jellyfin" "http://jellyfin:8096/jellyfin"
+# Services on default network use container names
+# Services behind gluetun (radarr, prowlarr) use 127.0.0.1 (host network)
+wait_for_service "qBittorrent" "http://127.0.0.1:8080"
+wait_for_service "Sonarr" "http://127.0.0.1:8989"
+wait_for_service "Radarr" "http://127.0.0.1:7878"
+wait_for_service "Prowlarr" "http://127.0.0.1:9696"
+wait_for_service "Bazarr" "http://127.0.0.1:6767"
+wait_for_service "Jellyfin" "http://127.0.0.1:8096"
 
 # Get API keys
 SONARR_KEY=$(get_api_key /config/sonarr/config.xml)
@@ -74,7 +76,7 @@ log "Configuring qBittorrent..."
 QB_TEMP_PASS="${QB_PASSWORD:-adminadmin}"
 
 # Login
-QB_COOKIE=$(curl -s -c - "http://qbittorrent:8080/api/v2/auth/login" \
+QB_COOKIE=$(curl -s -c - "http://127.0.0.1:8080/api/v2/auth/login" \
   --data-urlencode "username=admin" \
   --data-urlencode "password=$QB_TEMP_PASS" 2>/dev/null | grep SID | awk '{print $NF}')
 
@@ -83,7 +85,7 @@ if [ -z "$QB_COOKIE" ]; then
   # Try to read from the container logs - skip if can't login
   warn "Skipping qBittorrent config - login manually first time"
 else
-  curl -s -b "SID=$QB_COOKIE" "http://qbittorrent:8080/api/v2/app/setPreferences" \
+  curl -s -b "SID=$QB_COOKIE" "http://127.0.0.1:8080/api/v2/app/setPreferences" \
     --data-urlencode "json={
       \"save_path\": \"/downloads/complete/\",
       \"temp_path_enabled\": true,
@@ -95,9 +97,9 @@ else
     }"
 
   # Create categories
-  curl -s -b "SID=$QB_COOKIE" "http://qbittorrent:8080/api/v2/torrents/createCategory" \
+  curl -s -b "SID=$QB_COOKIE" "http://127.0.0.1:8080/api/v2/torrents/createCategory" \
     --data-urlencode "category=tv" --data-urlencode "savePath=/downloads/complete/"
-  curl -s -b "SID=$QB_COOKIE" "http://qbittorrent:8080/api/v2/torrents/createCategory" \
+  curl -s -b "SID=$QB_COOKIE" "http://127.0.0.1:8080/api/v2/torrents/createCategory" \
     --data-urlencode "category=movies" --data-urlencode "savePath=/downloads/complete/"
 
   log "qBittorrent configured!"
@@ -109,11 +111,11 @@ fi
 log "Configuring Sonarr..."
 
 # Check if download client already exists
-EXISTING_DC=$(curl -s "http://sonarr:8989/sonarr/api/v3/downloadclient" \
+EXISTING_DC=$(curl -s "http://127.0.0.1:8989/sonarr/api/v3/downloadclient" \
   -H "X-Api-Key: $SONARR_KEY" | grep -c "qBittorrent" 2>/dev/null || echo "0")
 
 if [ "$EXISTING_DC" = "0" ]; then
-  curl -s -X POST "http://sonarr:8989/sonarr/api/v3/downloadclient" \
+  curl -s -X POST "http://127.0.0.1:8989/sonarr/api/v3/downloadclient" \
     -H "Content-Type: application/json" \
     -H "X-Api-Key: $SONARR_KEY" \
     -d '{
@@ -148,11 +150,11 @@ else
 fi
 
 # Add root folder
-EXISTING_RF=$(curl -s "http://sonarr:8989/sonarr/api/v3/rootfolder" \
+EXISTING_RF=$(curl -s "http://127.0.0.1:8989/sonarr/api/v3/rootfolder" \
   -H "X-Api-Key: $SONARR_KEY" | grep -c "/tv" 2>/dev/null || echo "0")
 
 if [ "$EXISTING_RF" = "0" ]; then
-  curl -s -X POST "http://sonarr:8989/sonarr/api/v3/rootfolder" \
+  curl -s -X POST "http://127.0.0.1:8989/sonarr/api/v3/rootfolder" \
     -H "Content-Type: application/json" \
     -H "X-Api-Key: $SONARR_KEY" \
     -d '{"path": "/tv"}' > /dev/null
@@ -166,11 +168,11 @@ log "Sonarr configured!"
 # ============================================
 log "Configuring Radarr..."
 
-EXISTING_DC=$(curl -s "http://gluetun:7878/radarr/api/v3/downloadclient" \
+EXISTING_DC=$(curl -s "http://127.0.0.1:7878/radarr/api/v3/downloadclient" \
   -H "X-Api-Key: $RADARR_KEY" | grep -c "qBittorrent" 2>/dev/null || echo "0")
 
 if [ "$EXISTING_DC" = "0" ]; then
-  curl -s -X POST "http://gluetun:7878/radarr/api/v3/downloadclient" \
+  curl -s -X POST "http://127.0.0.1:7878/radarr/api/v3/downloadclient" \
     -H "Content-Type: application/json" \
     -H "X-Api-Key: $RADARR_KEY" \
     -d '{
@@ -202,11 +204,11 @@ if [ "$EXISTING_DC" = "0" ]; then
   log "  Added qBittorrent download client"
 fi
 
-EXISTING_RF=$(curl -s "http://gluetun:7878/radarr/api/v3/rootfolder" \
+EXISTING_RF=$(curl -s "http://127.0.0.1:7878/radarr/api/v3/rootfolder" \
   -H "X-Api-Key: $RADARR_KEY" | grep -c "/movies" 2>/dev/null || echo "0")
 
 if [ "$EXISTING_RF" = "0" ]; then
-  curl -s -X POST "http://gluetun:7878/radarr/api/v3/rootfolder" \
+  curl -s -X POST "http://127.0.0.1:7878/radarr/api/v3/rootfolder" \
     -H "Content-Type: application/json" \
     -H "X-Api-Key: $RADARR_KEY" \
     -d '{"path": "/movies"}' > /dev/null
@@ -221,11 +223,11 @@ log "Radarr configured!"
 log "Configuring Prowlarr indexers..."
 
 # Add Nyaa.si
-EXISTING_IDX=$(curl -s "http://gluetun:9696/prowlarr/api/v1/indexer" \
+EXISTING_IDX=$(curl -s "http://127.0.0.1:9696/prowlarr/api/v1/indexer" \
   -H "X-Api-Key: $PROWLARR_KEY" | grep -c "Nyaa" 2>/dev/null || echo "0")
 
 if [ "$EXISTING_IDX" = "0" ]; then
-  curl -s -X POST "http://gluetun:9696/prowlarr/api/v1/indexer" \
+  curl -s -X POST "http://127.0.0.1:9696/prowlarr/api/v1/indexer" \
     -H "Content-Type: application/json" \
     -H "X-Api-Key: $PROWLARR_KEY" \
     -d '{
@@ -255,11 +257,11 @@ fi
 
 # Add RuTracker (if credentials provided)
 if [ -n "$RUTRACKER_USERNAME" ] && [ -n "$RUTRACKER_PASSWORD" ]; then
-  EXISTING_RT=$(curl -s "http://gluetun:9696/prowlarr/api/v1/indexer" \
+  EXISTING_RT=$(curl -s "http://127.0.0.1:9696/prowlarr/api/v1/indexer" \
     -H "X-Api-Key: $PROWLARR_KEY" | grep -c "RuTracker" 2>/dev/null || echo "0")
 
   if [ "$EXISTING_RT" = "0" ]; then
-    curl -s -X POST "http://gluetun:9696/prowlarr/api/v1/indexer" \
+    curl -s -X POST "http://127.0.0.1:9696/prowlarr/api/v1/indexer" \
       -H "Content-Type: application/json" \
       -H "X-Api-Key: $PROWLARR_KEY" \
       -d '{
@@ -300,12 +302,12 @@ log "Configuring Prowlarr app sync..."
 # Prowlarr and Radarr share gluetun network, so they can reach each other via localhost
 # Sonarr is on default network, reachable by container name
 
-EXISTING_APPS=$(curl -s "http://gluetun:9696/prowlarr/api/v1/applications" \
+EXISTING_APPS=$(curl -s "http://127.0.0.1:9696/prowlarr/api/v1/applications" \
   -H "X-Api-Key: $PROWLARR_KEY")
 
 # Add Sonarr sync
 if echo "$EXISTING_APPS" | grep -qv "Sonarr" 2>/dev/null; then
-  curl -s -X POST "http://gluetun:9696/prowlarr/api/v1/applications" \
+  curl -s -X POST "http://127.0.0.1:9696/prowlarr/api/v1/applications" \
     -H "Content-Type: application/json" \
     -H "X-Api-Key: $PROWLARR_KEY" \
     -d '{
@@ -314,7 +316,7 @@ if echo "$EXISTING_APPS" | grep -qv "Sonarr" 2>/dev/null; then
       "implementation": "Sonarr",
       "configContract": "SonarrSettings",
       "fields": [
-        {"name": "baseUrl", "value": "http://sonarr:8989/sonarr"},
+        {"name": "baseUrl", "value": "http://127.0.0.1:8989/sonarr"},
         {"name": "prowlarrUrl", "value": "http://localhost:9696/prowlarr"},
         {"name": "apiKey", "value": "'"$SONARR_KEY"'"},
         {"name": "syncCategories", "value": [5000, 5010, 5020, 5030, 5040, 5045, 5050, 5070]},
@@ -327,7 +329,7 @@ fi
 
 # Add Radarr sync (Radarr is on same gluetun network as Prowlarr)
 if echo "$EXISTING_APPS" | grep -qv "Radarr" 2>/dev/null; then
-  curl -s -X POST "http://gluetun:9696/prowlarr/api/v1/applications" \
+  curl -s -X POST "http://127.0.0.1:9696/prowlarr/api/v1/applications" \
     -H "Content-Type: application/json" \
     -H "X-Api-Key: $PROWLARR_KEY" \
     -d '{
@@ -347,7 +349,7 @@ if echo "$EXISTING_APPS" | grep -qv "Radarr" 2>/dev/null; then
 fi
 
 # Trigger sync
-curl -s -X POST "http://gluetun:9696/prowlarr/api/v1/indexer/action/syncAll" \
+curl -s -X POST "http://127.0.0.1:9696/prowlarr/api/v1/indexer/action/syncAll" \
   -H "X-Api-Key: $PROWLARR_KEY" > /dev/null 2>&1 || true
 
 log "Prowlarr configured!"
@@ -424,11 +426,11 @@ fi
 log "Configuring Jellyfin..."
 
 # Check if Jellyfin is already configured (has users)
-JF_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://jellyfin:8096/jellyfin/Startup/Configuration" 2>/dev/null)
+JF_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8096/jellyfin/Startup/Configuration" 2>/dev/null)
 
 if [ "$JF_STATUS" = "200" ]; then
   # Step 1: Set startup configuration
-  curl -s -X POST "http://jellyfin:8096/jellyfin/Startup/Configuration" \
+  curl -s -X POST "http://127.0.0.1:8096/jellyfin/Startup/Configuration" \
     -H "Content-Type: application/json" \
     -d '{
       "UICulture": "ru-RU",
@@ -437,7 +439,7 @@ if [ "$JF_STATUS" = "200" ]; then
     }' > /dev/null
 
   # Step 2: Create admin user
-  curl -s -X POST "http://jellyfin:8096/jellyfin/Startup/User" \
+  curl -s -X POST "http://127.0.0.1:8096/jellyfin/Startup/User" \
     -H "Content-Type: application/json" \
     -d "{
       \"Name\": \"${JELLYFIN_USER:-admin}\",
@@ -445,11 +447,11 @@ if [ "$JF_STATUS" = "200" ]; then
     }" > /dev/null
 
   # Step 3: Complete wizard
-  curl -s -X POST "http://jellyfin:8096/jellyfin/Startup/Complete" \
+  curl -s -X POST "http://127.0.0.1:8096/jellyfin/Startup/Complete" \
     -H "Content-Type: application/json" > /dev/null
 
   # Step 4: Authenticate
-  JF_AUTH=$(curl -s -X POST "http://jellyfin:8096/jellyfin/Users/AuthenticateByName" \
+  JF_AUTH=$(curl -s -X POST "http://127.0.0.1:8096/jellyfin/Users/AuthenticateByName" \
     -H "Content-Type: application/json" \
     -H 'Authorization: MediaBrowser Client="SetupScript", Device="Init", DeviceId="media-server-init", Version="1.0.0"' \
     -d "{
@@ -463,7 +465,7 @@ if [ "$JF_STATUS" = "200" ]; then
     JF_HEADER="Authorization: MediaBrowser Client=\"SetupScript\", Device=\"Init\", DeviceId=\"media-server-init\", Version=\"1.0.0\", Token=\"$JF_TOKEN\""
 
     # Add Movies library
-    curl -s -X POST "http://jellyfin:8096/jellyfin/Library/VirtualFolders?name=Movies&collectionType=movies&refreshLibrary=false" \
+    curl -s -X POST "http://127.0.0.1:8096/jellyfin/Library/VirtualFolders?name=Movies&collectionType=movies&refreshLibrary=false" \
       -H "Content-Type: application/json" \
       -H "$JF_HEADER" \
       -d '{
@@ -476,7 +478,7 @@ if [ "$JF_STATUS" = "200" ]; then
       }' > /dev/null 2>&1
 
     # Add TV library
-    curl -s -X POST "http://jellyfin:8096/jellyfin/Library/VirtualFolders?name=TV%20Shows&collectionType=tvshows&refreshLibrary=false" \
+    curl -s -X POST "http://127.0.0.1:8096/jellyfin/Library/VirtualFolders?name=TV%20Shows&collectionType=tvshows&refreshLibrary=false" \
       -H "Content-Type: application/json" \
       -H "$JF_HEADER" \
       -d '{

@@ -624,7 +624,7 @@
             btn.innerHTML = '<span class="spinner"></span>';
 
             try {
-                const res = await fetch('/api/validate/vpn', {
+                const res = await fetch('api/validate/vpn', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ wireguard_private_key: key, provider })
@@ -663,7 +663,7 @@
             btn.innerHTML = '<span class="spinner"></span>';
 
             try {
-                const res = await fetch('/api/validate/rutracker', {
+                const res = await fetch('api/validate/rutracker', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ username, password })
@@ -716,7 +716,7 @@
             btn.innerHTML = '<span class="spinner"></span>';
 
             try {
-                const res = await fetch('/api/validate/telegram', {
+                const res = await fetch('api/validate/telegram', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ bot_token: token })
@@ -771,7 +771,7 @@
             document.getElementById('progress-container').style.display = 'block';
 
             try {
-                await fetch('/api/deploy', {
+                await fetch('api/deploy', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(getFormData())
@@ -787,7 +787,7 @@
         function pollStatus() {
             const interval = setInterval(async () => {
                 try {
-                    const res = await fetch('/api/status');
+                    const res = await fetch('api/status');
                     const data = await res.json();
 
                     document.getElementById('progress-fill').style.width = data.progress + '%';
