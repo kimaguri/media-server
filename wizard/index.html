@@ -822,6 +822,37 @@
             }
         });
 
+        // On page load: check if deploy is running/complete
+        (async function checkExistingState() {
+            try {
+                const res = await fetch('api/status');
+                const data = await res.json();
+                if (data.status === 'running') {
+                    currentStep = 4;
+                    showStep(4);
+                    document.getElementById('deploy-buttons').style.display = 'none';
+                    document.getElementById('progress-container').style.display = 'block';
+                    document.getElementById('progress-fill').style.width = data.progress + '%';
+                    document.getElementById('progress-step').textContent = data.step;
+                    const logsEl = document.getElementById('deploy-logs');
+                    logsEl.innerHTML = data.logs.map(l => `<div class="log-entry">${l}</div>`).join('');
+                    pollStatus();
+                } else if (data.status === 'complete') {
+                    showStep('complete');
+                    document.querySelectorAll('.step-dot').forEach(d => d.classList.add('done'));
+                } else if (data.status === 'error') {
+                    currentStep = 4;
+                    showStep(4);
+                    document.getElementById('deploy-buttons').style.display = 'none';
+                    document.getElementById('progress-container').style.display = 'block';
+                    document.getElementById('progress-fill').style.width = data.progress + '%';
+                    document.getElementById('progress-step').textContent = 'Error: ' + data.step;
+                    const logsEl = document.getElementById('deploy-logs');
+                    logsEl.innerHTML = data.logs.map(l => `<div class="log-entry">${l}</div>`).join('');
+                }
+            } catch (e) {}
+        })();
+
         // Password real-time validation
         ['qb_password', 'jellyfin_password'].forEach(id => {
             document.getElementById(id).addEventListener('input', function() {

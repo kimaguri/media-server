@@ -17,13 +17,24 @@ PORT = 8888
 MEDIA_DIR = os.environ.get('MEDIA_DIR', '/opt/media')
 WIZARD_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Deployment state
-deploy_state = {
-    'status': 'idle',  # idle, running, complete, error
-    'step': '',
-    'progress': 0,
-    'logs': []
-}
+# Deployment state - persisted to file for refresh survival
+STATE_FILE = os.path.join(MEDIA_DIR, '.wizard_state.json')
+
+def load_state():
+    try:
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {'status': 'idle', 'step': '', 'progress': 0, 'logs': []}
+
+def save_state():
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(deploy_state, f)
+    except:
+        pass
+
+deploy_state = load_state()
 
 
 class WizardHandler(http.server.SimpleHTTPRequestHandler):
@@ -196,7 +207,9 @@ class WizardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(400, {'error': 'Deployment already in progress'})
             return
 
-        deploy_state = {'status': 'running', 'step': 'Starting...', 'progress': 0, 'logs': []}
+        deploy_state.clear()
+        deploy_state.update({'status': 'running', 'step': 'Starting...', 'progress': 0, 'logs': []})
+        save_state()
 
         # Start deployment in background thread
         thread = threading.Thread(target=run_deployment, args=(data,), daemon=True)
@@ -217,6 +230,7 @@ def run_deployment(data):
         deploy_state['progress'] = progress
         if log_msg:
             deploy_state['logs'].append(log_msg)
+        save_state()
 
     try:
         # Step 1: Generate .env
@@ -365,12 +379,21 @@ JELLYFIN_PASSWORD={data.get('jellyfin_password', 'changeme')}
         # Step 7: Restore full Caddyfile and restart
         update('Applying URL settings...', 90, 'Switching to production Caddy config')
 
-        # Copy full Caddyfile from repo
+        # Read production Caddyfile and prepend staging CA (if rate limited)
         full_caddyfile = os.path.join(MEDIA_DIR, 'Caddyfile')
         caddy_config = os.path.join(MEDIA_DIR, 'config/caddy/Caddyfile')
         if os.path.exists(full_caddyfile):
-            import shutil
-            shutil.copy2(full_caddyfile, caddy_config)
+            with open(full_caddyfile, 'r') as f:
+                caddyfile_content = f.read()
+            # Check current Caddyfile for staging CA setting
+            current_caddy = ''
+            if os.path.exists(caddy_config):
+                with open(caddy_config, 'r') as f:
+                    current_caddy = f.read()
+            if 'acme-staging' in current_caddy:
+                caddyfile_content = '{\n    acme_ca https://acme-staging-v02.api.letsencrypt.org/directory\n}\n\n' + caddyfile_content
+            with open(caddy_config, 'w') as f:
+                f.write(caddyfile_content)
 
         subprocess.run(
             ['docker', 'compose', 'restart', 'sonarr', 'radarr', 'prowlarr', 'bazarr', 'jellyfin', 'caddy'],
@@ -412,11 +435,13 @@ JELLYFIN_PASSWORD={data.get('jellyfin_password', 'changeme')}
         deploy_state['status'] = 'complete'
         deploy_state['services_ok'] = services_ok
         deploy_state['services_fail'] = services_fail
+        save_state()
 
     except Exception as e:
         deploy_state['status'] = 'error'
         deploy_state['step'] = f'Error: {str(e)}'
         deploy_state['logs'].append(str(e))
+        save_state()
 
 
 class ThreadedServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
