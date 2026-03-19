@@ -1,5 +1,6 @@
 #!/bin/bash
-set -euo pipefail
+set -uo pipefail
+# NOT using set -e — we handle errors per-step, script must continue
 
 # Colors
 GREEN='\033[0;32m'
