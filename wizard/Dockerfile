@@ -7,4 +7,5 @@ COPY api.py index.html ./
 
 EXPOSE 8888
 
-CMD ["python3", "api.py"]
+ENV PYTHONUNBUFFERED=1
+CMD ["python3", "-u", "api.py"]

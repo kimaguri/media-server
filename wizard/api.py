@@ -218,12 +218,14 @@ class WizardHandler(http.server.SimpleHTTPRequestHandler):
         self.send_json(200, {'message': 'Deployment started'})
 
     def log_message(self, format, *args):
-        # Suppress default access logs
-        pass
+        import sys
+        sys.stderr.write(f"[HTTP] {format % args}\n")
 
 
 def run_deployment(data):
     global deploy_state
+    import sys
+    print(f"[DEPLOY] Starting deployment thread...", file=sys.stderr, flush=True)
 
     def update(step, progress, log_msg=''):
         deploy_state['step'] = step
@@ -449,6 +451,9 @@ JELLYFIN_PASSWORD={data.get('jellyfin_password', 'changeme')}
         save_state()
 
     except Exception as e:
+        import sys, traceback
+        print(f"[DEPLOY] ERROR: {e}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
         deploy_state['status'] = 'error'
         deploy_state['step'] = f'Error: {str(e)}'
         deploy_state['logs'].append(str(e))
