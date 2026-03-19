@@ -316,7 +316,7 @@ JELLYFIN_PASSWORD={data.get('jellyfin_password', 'changeme')}
         update('Starting services...', 60, 'Launching all containers')
         subprocess.run(
             ['docker', 'compose', 'up', '-d'],
-            cwd=MEDIA_DIR, capture_output=True, text=True, timeout=120
+            cwd=MEDIA_DIR, capture_output=True, text=True, timeout=600
         )
         update('Services starting', 70, 'Waiting for services to initialize')
         time.sleep(15)
