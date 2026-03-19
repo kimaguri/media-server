@@ -148,40 +148,9 @@ log "Starting media server auto-configuration..."
 echo ""
 
 # ============================================
-# Phase 1: Set URL Bases + Auth in config.xml
-# Done BEFORE waiting, because services may restart
+# Phase 1: Wait for all services
 # ============================================
-step "1/10: Setting URL Bases and Auth..."
-
-for pair in "sonarr:sonarr" "radarr:radarr" "prowlarr:prowlarr"; do
-  svc="${pair%%:*}"
-  base="${pair##*:}"
-  cfg="/config/$svc/config.xml"
-
-  if [ -f "$cfg" ]; then
-    # Set URL Base
-    sed -i "s|<UrlBase/>|<UrlBase>/$base</UrlBase>|" "$cfg" 2>/dev/null || true
-    sed -i "s|<UrlBase></UrlBase>|<UrlBase>/$base</UrlBase>|" "$cfg" 2>/dev/null || true
-
-    # Disable auth wizard
-    sed -i 's|<AuthenticationMethod>None</AuthenticationMethod>|<AuthenticationMethod>Forms</AuthenticationMethod>|' "$cfg" 2>/dev/null || true
-    sed -i 's|<AuthenticationRequired>Enabled</AuthenticationRequired>|<AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>|' "$cfg" 2>/dev/null || true
-    if ! grep -q "AuthenticationMethod" "$cfg" 2>/dev/null; then
-      sed -i 's|</Config>|  <AuthenticationMethod>Forms</AuthenticationMethod>\n  <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>\n</Config>|' "$cfg" 2>/dev/null || true
-    fi
-
-    log "  $svc: URL Base /$base, auth disabled"
-  else
-    warn "  $svc: config.xml not found yet"
-  fi
-done
-
-echo ""
-
-# ============================================
-# Phase 2: Wait for all services
-# ============================================
-step "2/10: Waiting for services..."
+step "1/10: Waiting for services..."
 
 wait_for_service "qBittorrent" "http://127.0.0.1:8080"
 wait_for_service "Sonarr" "http://127.0.0.1:8989"
@@ -190,6 +159,35 @@ wait_for_service "Prowlarr" "http://127.0.0.1:9696"
 wait_for_service "Bazarr" "http://127.0.0.1:6767"
 wait_for_service "Jellyfin" "http://127.0.0.1:8096"
 wait_for_service "Jellyseerr" "http://127.0.0.1:5055"
+
+echo ""
+
+# ============================================
+# Phase 2: Set URL Bases + Auth in config.xml
+# Done AFTER services started (so config.xml exists)
+# ============================================
+step "2/10: Setting URL Bases and Auth..."
+
+for pair in "sonarr:sonarr" "radarr:radarr" "prowlarr:prowlarr"; do
+  svc="${pair%%:*}"
+  base="${pair##*:}"
+  cfg="/config/$svc/config.xml"
+
+  if [ -f "$cfg" ]; then
+    sed -i "s|<UrlBase/>|<UrlBase>/$base</UrlBase>|" "$cfg" 2>/dev/null || true
+    sed -i "s|<UrlBase></UrlBase>|<UrlBase>/$base</UrlBase>|" "$cfg" 2>/dev/null || true
+
+    sed -i 's|<AuthenticationMethod>None</AuthenticationMethod>|<AuthenticationMethod>Forms</AuthenticationMethod>|' "$cfg" 2>/dev/null || true
+    sed -i 's|<AuthenticationRequired>Enabled</AuthenticationRequired>|<AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>|' "$cfg" 2>/dev/null || true
+    if ! grep -q "AuthenticationMethod" "$cfg" 2>/dev/null; then
+      sed -i 's|</Config>|  <AuthenticationMethod>Forms</AuthenticationMethod>\n  <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>\n</Config>|' "$cfg" 2>/dev/null || true
+    fi
+
+    log "  ✓ $svc: URL Base /$base, auth disabled"
+  else
+    warn "  $svc: config.xml not found"
+  fi
+done
 
 echo ""
 
@@ -287,22 +285,25 @@ step "5/10: Configuring qBittorrent..."
 
 QB_COOKIE=""
 
-# Try configured password first
-QB_LOGIN=$(curl -s -c - "http://127.0.0.1:8080/api/v2/auth/login" \
-  --data-urlencode "username=admin" \
-  --data-urlencode "password=${QB_PASSWORD:-adminadmin}" 2>/dev/null) || true
-QB_COOKIE=$(echo "$QB_LOGIN" | grep SID | awk '{print $NF}') || true
+# qBittorrent 4.6+ generates random temp password on first run
+# Try temp password from docker logs FIRST (most likely on fresh install)
+QB_TEMP=$(docker logs qbittorrent 2>&1 | grep "temporary password" | tail -1 | awk '{print $NF}' 2>/dev/null) || true
 
-# If failed, try temp password from docker logs
+if [ -n "$QB_TEMP" ]; then
+  log "  Found temp password: ${QB_TEMP:0:4}..."
+  QB_LOGIN=$(curl -s -c - "http://127.0.0.1:8080/api/v2/auth/login" \
+    --data-urlencode "username=admin" \
+    --data-urlencode "password=$QB_TEMP" 2>/dev/null) || true
+  QB_COOKIE=$(echo "$QB_LOGIN" | grep SID | awk '{print $NF}') || true
+fi
+
+# If temp didn't work, try configured password
 if [ -z "$QB_COOKIE" ]; then
-  QB_TEMP=$(docker logs qbittorrent 2>&1 | grep "temporary password" | awk '{print $NF}' 2>/dev/null) || true
-  if [ -n "$QB_TEMP" ]; then
-    log "  Using temp password from logs..."
-    QB_LOGIN=$(curl -s -c - "http://127.0.0.1:8080/api/v2/auth/login" \
-      --data-urlencode "username=admin" \
-      --data-urlencode "password=$QB_TEMP" 2>/dev/null) || true
-    QB_COOKIE=$(echo "$QB_LOGIN" | grep SID | awk '{print $NF}') || true
-  fi
+  log "  Trying configured password..."
+  QB_LOGIN=$(curl -s -c - "http://127.0.0.1:8080/api/v2/auth/login" \
+    --data-urlencode "username=admin" \
+    --data-urlencode "password=${QB_PASSWORD:-adminadmin}" 2>/dev/null) || true
+  QB_COOKIE=$(echo "$QB_LOGIN" | grep SID | awk '{print $NF}') || true
 fi
 
 if [ -n "$QB_COOKIE" ]; then
