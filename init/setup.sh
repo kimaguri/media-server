@@ -425,39 +425,47 @@ fi
 # ============================================
 log "Configuring Jellyfin..."
 
-# Check if Jellyfin is already configured (has users)
-JF_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8096/jellyfin/Startup/Configuration" 2>/dev/null)
-
+# Check if Jellyfin startup wizard is available
+# Try without base URL first (fresh install), then with base URL
+JF_BASE=""
+JF_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8096/Startup/Configuration" 2>/dev/null)
 if [ "$JF_STATUS" = "200" ]; then
-  # Step 1: Set startup configuration
-  curl -s -X POST "http://127.0.0.1:8096/jellyfin/Startup/Configuration" \
+  JF_BASE="http://127.0.0.1:8096"
+else
+  JF_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8096/jellyfin/Startup/Configuration" 2>/dev/null)
+  if [ "$JF_STATUS" = "200" ]; then
+    JF_BASE="http://127.0.0.1:8096/jellyfin"
+  fi
+fi
+
+if [ -n "$JF_BASE" ]; then
+  # Step 1: GET /Startup/User FIRST (triggers user initialization in Jellyfin 10.10+)
+  log "  Initializing Jellyfin user..."
+  curl -s "$JF_BASE/Startup/User" > /dev/null
+
+  # Step 2: Set admin username and password (modifies the auto-created user)
+  curl -s -o /dev/null -X POST "$JF_BASE/Startup/User" \
     -H "Content-Type: application/json" \
-    -d '{
-      "UICulture": "ru-RU",
-      "MetadataCountryCode": "RU",
-      "PreferredMetadataLanguage": "ru"
-    }' > /dev/null
+    -d "{\"Name\":\"${JELLYFIN_USER:-admin}\",\"Password\":\"${JELLYFIN_PASSWORD:-admin}\"}"
 
-  # Step 2: Create admin user
-  curl -s -X POST "http://127.0.0.1:8096/jellyfin/Startup/User" \
+  # Step 3: Set startup configuration
+  curl -s -o /dev/null -X POST "$JF_BASE/Startup/Configuration" \
     -H "Content-Type: application/json" \
-    -d "{
-      \"Name\": \"${JELLYFIN_USER:-admin}\",
-      \"Password\": \"${JELLYFIN_PASSWORD:-admin}\"
-    }" > /dev/null
+    -d '{"UICulture":"ru-RU","MetadataCountryCode":"RU","PreferredMetadataLanguage":"ru"}'
 
-  # Step 3: Complete wizard
-  curl -s -X POST "http://127.0.0.1:8096/jellyfin/Startup/Complete" \
-    -H "Content-Type: application/json" > /dev/null
+  # Step 4: Enable remote access
+  curl -s -o /dev/null -X POST "$JF_BASE/Startup/RemoteAccess" \
+    -H "Content-Type: application/json" \
+    -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}'
 
-  # Step 4: Authenticate
-  JF_AUTH=$(curl -s -X POST "http://127.0.0.1:8096/jellyfin/Users/AuthenticateByName" \
+  # Step 5: Complete wizard
+  curl -s -o /dev/null -X POST "$JF_BASE/Startup/Complete"
+
+  # Step 6: Authenticate
+  JF_AUTH=$(curl -s -X POST "$JF_BASE/Users/AuthenticateByName" \
     -H "Content-Type: application/json" \
     -H 'Authorization: MediaBrowser Client="SetupScript", Device="Init", DeviceId="media-server-init", Version="1.0.0"' \
-    -d "{
-      \"Username\": \"${JELLYFIN_USER:-admin}\",
-      \"Pw\": \"${JELLYFIN_PASSWORD:-admin}\"
-    }" 2>/dev/null)
+    -d "{\"Username\":\"${JELLYFIN_USER:-admin}\",\"Pw\":\"${JELLYFIN_PASSWORD:-admin}\"}" 2>/dev/null)
 
   JF_TOKEN=$(echo "$JF_AUTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('AccessToken',''))" 2>/dev/null)
 
