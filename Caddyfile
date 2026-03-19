@@ -18,6 +18,10 @@ lampa.sadmin.app {
     handle /deleterr* {
         reverse_proxy deleterr:8082
     }
+    redir /setup /setup/ 301
+    handle_path /setup/* {
+        reverse_proxy setup-wizard:8888
+    }
     handle / {
         respond "Media Server OK" 200
     }

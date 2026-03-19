@@ -395,26 +395,37 @@ JELLYFIN_PASSWORD={data.get('jellyfin_password', 'changeme')}
             with open(caddy_config, 'w') as f:
                 f.write(caddyfile_content)
 
+        # Also fix Jellyfin base URL (Jellyfin overwrites network.xml on first start)
+        jf_network = os.path.join(MEDIA_DIR, 'config/jellyfin/config/network.xml')
+        if os.path.exists(jf_network):
+            with open(jf_network, 'r') as f:
+                jf_content = f.read()
+            jf_content = jf_content.replace('<BaseUrl />', '<BaseUrl>/jellyfin</BaseUrl>')
+            jf_content = jf_content.replace('<BaseUrl></BaseUrl>', '<BaseUrl>/jellyfin</BaseUrl>')
+            with open(jf_network, 'w') as f:
+                f.write(jf_content)
+
         subprocess.run(
             ['docker', 'compose', 'restart', 'sonarr', 'radarr', 'prowlarr', 'bazarr', 'jellyfin', 'caddy'],
             cwd=MEDIA_DIR, capture_output=True, text=True, timeout=60
         )
-        time.sleep(10)
+        update('Services restarting...', 92, 'Waiting for services to apply settings')
+        time.sleep(20)
 
-        # Step 7: Verify
+        # Step 8: Verify
         update('Verifying...', 95, 'Checking all services')
         services_ok = []
         services_fail = []
 
         checks = [
-            ('Sonarr', 'http://localhost:8989/sonarr'),
-            ('Radarr', 'http://localhost:7878/radarr'),
-            ('Prowlarr', 'http://localhost:9696/prowlarr'),
+            ('Sonarr', 'http://localhost:8989'),
+            ('Radarr', 'http://localhost:7878'),
+            ('Prowlarr', 'http://localhost:9696'),
             ('qBittorrent', 'http://localhost:8080'),
-            ('Bazarr', 'http://localhost:6767/bazarr'),
+            ('Bazarr', 'http://localhost:6767'),
             ('TorrServer', 'http://localhost:8090'),
-            ('Jellyfin', 'http://localhost:8096/jellyfin'),
-            ('Seerr', 'http://localhost:5055'),
+            ('Jellyfin', 'http://localhost:8096'),
+            ('Jellyseerr', 'http://localhost:5055'),
         ]
 
         for name, url in checks:
