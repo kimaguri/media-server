@@ -579,7 +579,7 @@ if api_call GET "$JS_URL/api/v1/settings/public"; then
     # Step 1: Auth with Jellyfin (first user = admin)
     log "  Authenticating with Jellyfin..."
     if api_call_cookie POST "$JS_URL/api/v1/auth/jellyfin" \
-      "{\"username\":\"${JELLYFIN_USER:-admin}\",\"password\":\"${JELLYFIN_PASSWORD:-admin}\",\"hostname\":\"jellyfin\",\"port\":8096,\"useSsl\":false,\"urlBase\":\"/jellyfin\",\"email\":\"admin@media.server\"}" \
+      "{\"username\":\"${JELLYFIN_USER:-admin}\",\"password\":\"${JELLYFIN_PASSWORD:-admin}\",\"hostname\":\"jellyfin\",\"port\":8096,\"useSsl\":false,\"urlBase\":\"/jellyfin\",\"email\":\"admin@media.server\",\"serverType\":2}" \
       "$JS_COOKIES"; then
       log "  ✓ Admin user created"
     else
@@ -589,7 +589,7 @@ if api_call GET "$JS_URL/api/v1/settings/public"; then
     # Step 2: Configure Jellyfin server
     log "  Configuring Jellyfin connection..."
     api_call_cookie POST "$JS_URL/api/v1/settings/jellyfin" \
-      '{"name":"Jellyfin","hostname":"jellyfin","port":8096,"useSsl":false,"urlBase":"/jellyfin","externalHostname":"","jellyfinForgotPasswordUrl":""}' \
+      '{"hostname":"jellyfin","port":8096,"useSsl":false,"urlBase":"/jellyfin","externalHostname":"","jellyfinForgotPasswordUrl":""}' \
       "$JS_COOKIES" && log "  ✓ Jellyfin server configured"
 
     # Step 3: Sync and enable libraries
