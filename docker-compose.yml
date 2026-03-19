@@ -182,6 +182,7 @@ services:
       - JELLYFIN_USER=${JELLYFIN_USER:-admin}
       - JELLYFIN_PASSWORD=${JELLYFIN_PASSWORD:-changeme}
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
       - ./config/sonarr:/config/sonarr
       - ./config/radarr:/config/radarr
       - ./config/prowlarr:/config/prowlarr
