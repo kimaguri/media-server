@@ -527,9 +527,41 @@ fi
 echo ""
 
 # ============================================
-# Phase 10: Configure Jellyseerr
+# Phase 10: Set Jellyfin Base URL + Restart services
+# Must happen BEFORE Jellyseerr setup (needs working Jellyfin)
 # ============================================
-step "10/10: Configuring Jellyseerr..."
+step "10/12: Applying URL Base + restarting services..."
+
+JF_NET="/config/jellyfin/config/network.xml"
+if [ -f "$JF_NET" ]; then
+  sed -i 's|<BaseUrl />|<BaseUrl>/jellyfin</BaseUrl>|' "$JF_NET" 2>/dev/null || true
+  sed -i 's|<BaseUrl></BaseUrl>|<BaseUrl>/jellyfin</BaseUrl>|' "$JF_NET" 2>/dev/null || true
+  log "  ✓ Jellyfin Base URL → /jellyfin"
+else
+  mkdir -p /config/jellyfin/config
+  cat > "$JF_NET" << 'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<NetworkConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <BaseUrl>/jellyfin</BaseUrl>
+</NetworkConfiguration>
+XML
+  log "  ✓ Created network.xml with /jellyfin"
+fi
+
+log "  Restarting services to apply URL Bases..."
+docker restart sonarr radarr prowlarr bazarr jellyfin 2>/dev/null || true
+log "  Waiting for services to come back..."
+sleep 15
+wait_for_service "Sonarr" "http://127.0.0.1:8989"
+wait_for_service "Radarr" "http://127.0.0.1:7878"
+wait_for_service "Jellyfin" "http://127.0.0.1:8096"
+
+echo ""
+
+# ============================================
+# Phase 11: Configure Jellyseerr (AFTER Jellyfin restart)
+# ============================================
+step "11/12: Configuring Jellyseerr..."
 
 JS_URL="http://127.0.0.1:5055"
 JS_COOKIES="/tmp/jellyseerr-cookies.txt"
@@ -599,29 +631,24 @@ fi
 echo ""
 
 # ============================================
-# Final: Set Jellyfin Base URL
-# Done last because Jellyfin overwrites network.xml on first boot
+# Phase 12: Final verification
 # ============================================
-log "Setting Jellyfin Base URL..."
-JF_NET="/config/jellyfin/config/network.xml"
-if [ -f "$JF_NET" ]; then
-  sed -i 's|<BaseUrl />|<BaseUrl>/jellyfin</BaseUrl>|' "$JF_NET" 2>/dev/null || true
-  sed -i 's|<BaseUrl></BaseUrl>|<BaseUrl>/jellyfin</BaseUrl>|' "$JF_NET" 2>/dev/null || true
-  log "  ✓ Jellyfin Base URL → /jellyfin"
-else
-  mkdir -p /config/jellyfin/config
-  cat > "$JF_NET" << 'XML'
-<?xml version="1.0" encoding="utf-8"?>
-<NetworkConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-  <BaseUrl>/jellyfin</BaseUrl>
-</NetworkConfiguration>
-XML
-  log "  ✓ Created network.xml with /jellyfin"
-fi
+step "12/12: Verifying all services..."
 
-# ============================================
-# Done!
-# ============================================
+VERIFY_OK=0
+VERIFY_FAIL=0
+for check in "Sonarr:8989" "Radarr:7878" "Prowlarr:9696" "qBittorrent:8080" "Bazarr:6767" "TorrServer:8090" "Jellyfin:8096" "Jellyseerr:5055"; do
+  name="${check%%:*}"
+  port="${check##*:}"
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port" 2>/dev/null) || true
+  case "$code" in
+    200|302|307|308|401) log "  ✓ $name ($code)"; VERIFY_OK=$((VERIFY_OK + 1)) ;;
+    *) error "  ✗ $name ($code)"; VERIFY_FAIL=$((VERIFY_FAIL + 1)) ;;
+  esac
+done
+
+log "  Result: $VERIFY_OK OK, $VERIFY_FAIL failed"
+
 echo ""
 log "============================================"
 log "  Media Server Auto-Configuration Complete!"
@@ -637,4 +664,3 @@ log "  ✓ Jellyfin:    admin user, Movies/TV libraries"
 log "  ✓ Jellyseerr:  Jellyfin auth, Sonarr/Radarr connections"
 echo ""
 log "URL Bases: /sonarr /radarr /prowlarr /bazarr /jellyfin"
-log "NOTE: Restart services to apply URL Base changes."

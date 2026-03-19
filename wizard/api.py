@@ -349,45 +349,14 @@ JELLYFIN_PASSWORD={data.get('jellyfin_password', 'changeme')}
                 break
             time.sleep(3)
 
-        # Step 6: Disable auth wizards in *arr services
-        update('Configuring authentication...', 87, 'Setting up service auth')
+        # Step 6: Restore production Caddyfile
+        update('Switching to production Caddy config...', 88, 'Updating Caddy')
 
-        for config_path, service_name in [
-            (os.path.join(MEDIA_DIR, 'config/sonarr/config.xml'), 'Sonarr'),
-            (os.path.join(MEDIA_DIR, 'config/radarr/config.xml'), 'Radarr'),
-            (os.path.join(MEDIA_DIR, 'config/prowlarr/config.xml'), 'Prowlarr'),
-        ]:
-            if os.path.exists(config_path):
-                with open(config_path, 'r') as f:
-                    content = f.read()
-                # Set auth to Forms + DisabledForLocalAddresses (skips first-run wizard)
-                content = content.replace(
-                    '<AuthenticationMethod>None</AuthenticationMethod>',
-                    '<AuthenticationMethod>Forms</AuthenticationMethod>'
-                )
-                content = content.replace(
-                    '<AuthenticationRequired>Enabled</AuthenticationRequired>',
-                    '<AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>'
-                )
-                # If no auth method set yet, add it
-                if '<AuthenticationMethod>' not in content:
-                    content = content.replace(
-                        '</Config>',
-                        '  <AuthenticationMethod>Forms</AuthenticationMethod>\n  <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>\n</Config>'
-                    )
-                with open(config_path, 'w') as f:
-                    f.write(content)
-
-        # Step 7: Restore full Caddyfile and restart
-        update('Applying URL settings...', 90, 'Switching to production Caddy config')
-
-        # Read production Caddyfile and prepend staging CA (if rate limited)
         full_caddyfile = os.path.join(MEDIA_DIR, 'Caddyfile')
         caddy_config = os.path.join(MEDIA_DIR, 'config/caddy/Caddyfile')
         if os.path.exists(full_caddyfile):
             with open(full_caddyfile, 'r') as f:
                 caddyfile_content = f.read()
-            # Check current Caddyfile for staging CA setting
             current_caddy = ''
             if os.path.exists(caddy_config):
                 with open(caddy_config, 'r') as f:
@@ -397,22 +366,32 @@ JELLYFIN_PASSWORD={data.get('jellyfin_password', 'changeme')}
             with open(caddy_config, 'w') as f:
                 f.write(caddyfile_content)
 
-        # Also fix Jellyfin base URL (Jellyfin overwrites network.xml on first start)
-        jf_network = os.path.join(MEDIA_DIR, 'config/jellyfin/config/network.xml')
-        if os.path.exists(jf_network):
-            with open(jf_network, 'r') as f:
-                jf_content = f.read()
-            jf_content = jf_content.replace('<BaseUrl />', '<BaseUrl>/jellyfin</BaseUrl>')
-            jf_content = jf_content.replace('<BaseUrl></BaseUrl>', '<BaseUrl>/jellyfin</BaseUrl>')
-            with open(jf_network, 'w') as f:
-                f.write(jf_content)
-
         subprocess.run(
-            ['docker', 'compose', 'restart', 'sonarr', 'radarr', 'prowlarr', 'bazarr', 'jellyfin', 'caddy'],
+            ['docker', 'compose', 'restart', 'caddy'],
             cwd=MEDIA_DIR, capture_output=True, text=True, timeout=60
         )
-        update('Services restarting...', 92, 'Waiting for services to apply settings')
-        time.sleep(20)
+
+        # Wait for init to finish all phases (including restart + Jellyseerr)
+        update('Waiting for auto-configuration to complete...', 90, 'Init is restarting services and configuring Jellyseerr')
+        for i in range(120):
+            result = subprocess.run(
+                ['docker', 'inspect', 'media-init', '--format', '{{.State.Status}}'],
+                capture_output=True, text=True
+            )
+            status = result.stdout.strip()
+            if status == 'exited':
+                exit_result = subprocess.run(
+                    ['docker', 'inspect', 'media-init', '--format', '{{.State.ExitCode}}'],
+                    capture_output=True, text=True
+                )
+                if exit_result.stdout.strip() == '0':
+                    update('Auto-configuration complete', 95, 'All services configured')
+                else:
+                    update('Configuration completed with warnings', 95, 'Check init logs')
+                break
+            time.sleep(3)
+        else:
+            update('Init timed out', 95, 'Init container did not finish in time')
 
         # Step 8: Verify
         update('Verifying...', 95, 'Checking all services')
