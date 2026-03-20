@@ -1,3 +1,7 @@
+{
+    email sdon.mail@gmail.com
+}
+
 # Services with native URL Base support — path-based on main domain
 lampa.sadmin.app {
     handle /sonarr* {

@@ -226,6 +226,12 @@ services:
       - 443:443
     volumes:
       - ./config/caddy/Caddyfile:/etc/caddy/Caddyfile
-      - ./config/caddy/data:/data
-      - ./config/caddy/config:/config
+      - caddy_data:/data
+      - caddy_config:/config
     restart: unless-stopped
+
+volumes:
+  caddy_data:
+    name: media-caddy-data
+  caddy_config:
+    name: media-caddy-config
