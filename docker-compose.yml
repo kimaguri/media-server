@@ -133,6 +133,8 @@ services:
       - ./config/torrserver:/opt/ts
     ports:
       - 8090:8090
+      - 6891:6891
+      - 6891:6891/udp
     restart: unless-stopped
 
   jellyseerr:
