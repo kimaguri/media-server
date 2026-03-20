@@ -355,6 +355,16 @@ def handle_jellyfin_webhook(data):
             pass
 
 
+def handle_prowlarr_webhook(data):
+    """Handle Prowlarr grab events (manual downloads via Prowlarr search)."""
+    event = data.get("eventType", "")
+    if event == "Grab":
+        title = data.get("release", {}).get("releaseTitle", "?")
+        indexer = data.get("release", {}).get("indexer", "?")
+        size = fmt_size(data.get("release", {}).get("size", 0))
+        send_telegram(f"⬇️ <b>Качаем:</b> {title}\n{size} • {indexer}")
+
+
 def handle_jellyseerr_webhook(data):
     """Handle Jellyseerr notification webhooks."""
     ntype = data.get("notification_type", "")
@@ -406,6 +416,9 @@ class HubHandler(BaseHTTPRequestHandler):
         elif path == "/jellyfin" or path == "/webhook":
             log(f"Jellyfin webhook: {data.get('NotificationType', '?')}")
             handle_jellyfin_webhook(data)
+        elif path == "/prowlarr":
+            log(f"Prowlarr webhook: {data.get('eventType', '?')}")
+            handle_prowlarr_webhook(data)
         elif path == "/jellyseerr":
             log(f"Jellyseerr webhook: {data.get('notification_type', '?')}")
             handle_jellyseerr_webhook(data)
@@ -503,7 +516,7 @@ def main():
     # Start HTTP server
     server = HTTPServer(("0.0.0.0", PORT), HubHandler)
     log(f"Listening on port {PORT}")
-    log("Webhook endpoints: /radarr /sonarr /jellyfin /jellyseerr")
+    log("Webhook endpoints: /radarr /sonarr /prowlarr /jellyfin /jellyseerr")
 
     try:
         server.serve_forever()
