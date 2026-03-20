@@ -153,6 +153,19 @@ services:
       - "image.tmdb.org:195.181.166.158"
     restart: unless-stopped
 
+  media-cleanup:
+    build: ./cleanup
+    container_name: media-cleanup
+    environment:
+      - RADARR_URL=http://gluetun:7878/radarr
+      - RADARR_KEY=${RADARR_KEY}
+      - SONARR_URL=http://sonarr:8989/sonarr
+      - SONARR_KEY=${SONARR_KEY}
+      - PORT=9999
+    ports:
+      - 127.0.0.1:9999:9999
+    restart: unless-stopped
+
   deleterr:
     image: ghcr.io/rfsbraz/deleterr:latest
     container_name: deleterr
@@ -171,8 +184,9 @@ services:
       - TZ=${TZ}
     volumes:
       - ./config/jellyfin:/config
-      - ./movies:/movies:ro
-      - ./tv:/tv:ro
+      - ./movies:/movies
+      - ./tv:/tv
+      - ./sports:/sports
     ports:
       - 127.0.0.1:8096:8096
     restart: unless-stopped
