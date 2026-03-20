@@ -574,9 +574,9 @@ if api_call GET "$JS_URL/api/v1/settings/public"; then
   if [ "$JS_INIT" = "True" ]; then
     log "  Jellyseerr already initialized, updating Jellyfin connection..."
 
-    # Login to get session cookie
+    # Login to get session cookie (no hostname/port — already configured)
     if api_call_cookie POST "$JS_URL/api/v1/auth/jellyfin" \
-      "{\"username\":\"${JELLYFIN_USER:-admin}\",\"password\":\"${JELLYFIN_PASSWORD:-admin}\",\"hostname\":\"jellyfin\",\"port\":8096,\"useSsl\":false,\"urlBase\":\"/jellyfin\",\"email\":\"admin@media.server\",\"serverType\":2}" \
+      "{\"username\":\"${JELLYFIN_USER:-admin}\",\"password\":\"${JELLYFIN_PASSWORD:-admin}\"}" \
       "$JS_COOKIES"; then
 
       # Update Jellyfin server settings
