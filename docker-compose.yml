@@ -144,6 +144,9 @@ services:
       - ./config/jellyseerr:/app/config
     ports:
       - 127.0.0.1:5055:5055
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     restart: unless-stopped
 
   deleterr:
