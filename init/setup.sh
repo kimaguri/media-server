@@ -178,13 +178,15 @@ for pair in "sonarr:sonarr" "radarr:radarr" "prowlarr:prowlarr"; do
     sed -i "s|<UrlBase/>|<UrlBase>/$base</UrlBase>|" "$cfg" 2>/dev/null || true
     sed -i "s|<UrlBase></UrlBase>|<UrlBase>/$base</UrlBase>|" "$cfg" 2>/dev/null || true
 
-    sed -i 's|<AuthenticationMethod>None</AuthenticationMethod>|<AuthenticationMethod>Forms</AuthenticationMethod>|' "$cfg" 2>/dev/null || true
+    # Disable app-level auth — Caddy handles basic auth for external access
+    sed -i 's|<AuthenticationMethod>Forms</AuthenticationMethod>|<AuthenticationMethod>External</AuthenticationMethod>|' "$cfg" 2>/dev/null || true
+    sed -i 's|<AuthenticationMethod>None</AuthenticationMethod>|<AuthenticationMethod>External</AuthenticationMethod>|' "$cfg" 2>/dev/null || true
     sed -i 's|<AuthenticationRequired>Enabled</AuthenticationRequired>|<AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>|' "$cfg" 2>/dev/null || true
     if ! grep -q "AuthenticationMethod" "$cfg" 2>/dev/null; then
-      sed -i 's|</Config>|  <AuthenticationMethod>Forms</AuthenticationMethod>\n  <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>\n</Config>|' "$cfg" 2>/dev/null || true
+      sed -i 's|</Config>|  <AuthenticationMethod>External</AuthenticationMethod>\n  <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>\n</Config>|' "$cfg" 2>/dev/null || true
     fi
 
-    log "  ✓ $svc: URL Base /$base, auth disabled"
+    log "  ✓ $svc: URL Base /$base, auth=External (Caddy basic auth)"
   else
     warn "  $svc: config.xml not found"
   fi

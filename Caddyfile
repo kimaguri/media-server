@@ -2,25 +2,36 @@
     email sdon.mail@gmail.com
 }
 
+(admin_auth) {
+    basicauth {
+        admin $2a$14$E/MTuh6yiISJiVEnPYmyz..qBVnsB9ULM6AHJnxCSB5.E0P20vixC
+    }
+}
+
 # Services with native URL Base support — path-based on main domain
 lampa.sadmin.app {
     handle /sonarr* {
+        import admin_auth
         reverse_proxy sonarr:8989
     }
     handle /radarr* {
+        import admin_auth
         reverse_proxy gluetun:7878
     }
     handle /prowlarr* {
+        import admin_auth
         reverse_proxy gluetun:9696
     }
     handle /bazarr* {
+        import admin_auth
         reverse_proxy bazarr:6767
+    }
+    handle /deleterr* {
+        import admin_auth
+        reverse_proxy deleterr:8082
     }
     handle /jellyfin* {
         reverse_proxy jellyfin:8096
-    }
-    handle /deleterr* {
-        reverse_proxy deleterr:8082
     }
     redir /setup /setup/ 301
     handle_path /setup/* {
@@ -37,9 +48,11 @@ js.lampa.sadmin.app {
 }
 
 qbt.lampa.sadmin.app {
+    import admin_auth
     reverse_proxy qbittorrent:8080
 }
 
 ts.lampa.sadmin.app {
+    import admin_auth
     reverse_proxy torrserver:8090
 }
