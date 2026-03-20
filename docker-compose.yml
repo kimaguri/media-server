@@ -20,7 +20,6 @@ services:
     ports:
       - 127.0.0.1:9696:9696
       - 127.0.0.1:7878:7878
-      - 127.0.0.1:8090:8090
     volumes:
       - ./config/gluetun:/gluetun
     healthcheck:
@@ -127,15 +126,13 @@ services:
   torrserver:
     image: ghcr.io/yourok/torrserver:latest
     container_name: torrserver
-    network_mode: "service:gluetun"
     environment:
       - TS_PORT=8090
       - TS_HTTPAUTH=false
     volumes:
       - ./config/torrserver:/opt/ts
-    depends_on:
-      gluetun:
-        condition: service_healthy
+    ports:
+      - 8090:8090
     restart: unless-stopped
 
   jellyseerr:
