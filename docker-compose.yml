@@ -149,6 +149,8 @@ services:
     dns:
       - 1.1.1.1
       - 8.8.8.8
+    extra_hosts:
+      - "image.tmdb.org:195.181.166.158"
     restart: unless-stopped
 
   deleterr:
