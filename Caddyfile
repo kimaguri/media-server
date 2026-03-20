@@ -53,7 +53,6 @@ qbt.lampa.sadmin.app {
 }
 
 ts.lampa.sadmin.app {
-    import admin_auth
     reverse_proxy torrserver:8090
 }
 
