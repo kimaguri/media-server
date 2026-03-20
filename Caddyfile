@@ -53,7 +53,7 @@ qbt.lampa.sadmin.app {
 }
 
 ts.lampa.sadmin.app {
-    reverse_proxy torrserver:8090
+    reverse_proxy gluetun:8090
 }
 
 sp.lampa.sadmin.app {
