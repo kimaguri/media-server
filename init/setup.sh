@@ -626,13 +626,13 @@ print(json.dumps(libs))
     # Step 4: Add Sonarr
     log "  Adding Sonarr..."
     api_call_cookie POST "$JS_URL/api/v1/settings/sonarr" \
-      '{"name":"Sonarr","hostname":"sonarr","port":8989,"apiKey":"'"$SONARR_KEY"'","useSsl":false,"baseUrl":"","activeProfileId":1,"activeProfileName":"Any","activeDirectory":"/tv","is4k":false,"isDefault":true,"enableSeasonFolders":true}' \
+      '{"name":"Sonarr","hostname":"sonarr","port":8989,"apiKey":"'"$SONARR_KEY"'","useSsl":false,"baseUrl":"","activeProfileId":1,"activeProfileName":"Any","activeDirectory":"/tv","is4k":false,"isDefault":true,"enableSeasonFolders":true,"externalUrl":"https://lampa.sadmin.app/sonarr"}' \
       "$JS_COOKIES" && log "  ✓ Sonarr added"
 
     # Step 5: Add Radarr
     log "  Adding Radarr..."
     api_call_cookie POST "$JS_URL/api/v1/settings/radarr" \
-      '{"name":"Radarr","hostname":"gluetun","port":7878,"apiKey":"'"$RADARR_KEY"'","useSsl":false,"baseUrl":"","activeProfileId":1,"activeProfileName":"Any","activeDirectory":"/movies","is4k":false,"isDefault":true,"minimumAvailability":"released"}' \
+      '{"name":"Radarr","hostname":"gluetun","port":7878,"apiKey":"'"$RADARR_KEY"'","useSsl":false,"baseUrl":"","activeProfileId":1,"activeProfileName":"Any","activeDirectory":"/movies","is4k":false,"isDefault":true,"minimumAvailability":"released","externalUrl":"https://lampa.sadmin.app/radarr"}' \
       "$JS_COOKIES" && log "  ✓ Radarr added"
 
     # Step 6: Initialize
