@@ -56,8 +56,9 @@ def api_delete(url, api_key):
 
 
 def send_telegram(text):
+    log(f"TG: {text[:100]}")
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        log(f"Telegram not configured, would send: {text}")
+        log(f"Telegram not configured")
         return
     try:
         data = urllib.parse.urlencode({
@@ -199,6 +200,15 @@ class StateTracker:
                 pct = 0
 
             milestones = self.notified_progress.get(dl_id, set())
+
+            # On first init, just record current state without notifying
+            if not self.initialized:
+                for milestone in [25, 50, 75]:
+                    if pct >= milestone:
+                        milestones.add(milestone)
+                self.notified_progress[dl_id] = milestones
+                self.queue_items[dl_id] = {"title": title, "pct": pct, "status": status}
+                continue
 
             # Notify at 25%, 50%, 75%
             for milestone in [25, 50, 75]:
@@ -460,16 +470,20 @@ def poll_loop():
 
             if not state.initialized:
                 state.initialized = True
-                log(f"State initialized: {len(state.movies)} movies, {len(state.series)} series")
+                log(f"State initialized: {len(state.movies)} movies, {len(state.series)} series, {len(state.queue_items)} queue")
 
             # Adaptive sleep
             if has_active:
-                time.sleep(30)   # Active downloads — poll every 30s
+                log(f"Poll: {len(all_queue)} queue items, sleeping 30s")
+                time.sleep(30)
             else:
-                time.sleep(120)  # Idle — poll every 2 min
+                log(f"Poll: idle, sleeping 120s")
+                time.sleep(120)
 
         except Exception as e:
+            import traceback
             log(f"Poll error: {e}")
+            log(traceback.format_exc())
             time.sleep(60)
 
 
