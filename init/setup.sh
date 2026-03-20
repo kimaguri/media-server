@@ -444,18 +444,22 @@ if [ -n "${RUTRACKER_USERNAME:-}" ] && [ -n "${RUTRACKER_PASSWORD:-}" ]; then
   else
     log "  Adding RuTracker..."
     api_call POST "$P_URL/api/v1/indexer" '{
-      "name":"RuTracker","definitionName":"rutracker",
-      "implementation":"Cardigann","configContract":"CardigannSettings",
+      "name":"RuTracker","definitionName":"RuTracker.org",
+      "implementation":"RuTracker","configContract":"RuTrackerSettings",
       "enable":true,"supportsRss":true,"supportsSearch":true,
-      "appProfileId":1,"protocol":"torrent","privacy":"private","priority":25,
+      "appProfileId":1,"protocol":"torrent","privacy":"semiPrivate","priority":25,
       "fields":[
-        {"name":"definitionFile","value":"rutracker"},
         {"name":"baseUrl","value":"https://rutracker.org/"},
         {"name":"username","value":"'"$RUTRACKER_USERNAME"'"},
         {"name":"password","value":"'"$RUTRACKER_PASSWORD"'"},
-        {"name":"torrentBaseSettings.appMinimumSeeders","value":""},
-        {"name":"torrentBaseSettings.seedRatio","value":""},
-        {"name":"torrentBaseSettings.seedTime","value":""}
+        {"name":"russianLetters","value":false},
+        {"name":"useMagnetLinks","value":false},
+        {"name":"addRussianToTitle","value":false},
+        {"name":"moveFirstTagsToEndOfReleaseTitle","value":false},
+        {"name":"moveAllTagsToEndOfReleaseTitle","value":false},
+        {"name":"torrentBaseSettings.appMinimumSeeders","value":null},
+        {"name":"torrentBaseSettings.seedRatio","value":null},
+        {"name":"torrentBaseSettings.seedTime","value":null}
       ],"tags":[]}' "$P_AUTH" && log "  ✓ RuTracker added"
   fi
 else
@@ -474,8 +478,8 @@ if api_call GET "$P_URL/api/v1/applications" "" "$P_AUTH"; then
       "name":"Sonarr","syncLevel":"fullSync",
       "implementation":"Sonarr","configContract":"SonarrSettings",
       "fields":[
-        {"name":"baseUrl","value":"http://sonarr:8989"},
-        {"name":"prowlarrUrl","value":"http://localhost:9696"},
+        {"name":"baseUrl","value":"http://sonarr:8989/sonarr"},
+        {"name":"prowlarrUrl","value":"http://gluetun:9696"},
         {"name":"apiKey","value":"'"$SONARR_KEY"'"},
         {"name":"syncCategories","value":[5000,5010,5020,5030,5040,5045,5050,5070]},
         {"name":"animeSyncCategories","value":[5070]}
@@ -490,8 +494,8 @@ if api_call GET "$P_URL/api/v1/applications" "" "$P_AUTH"; then
       "name":"Radarr","syncLevel":"fullSync",
       "implementation":"Radarr","configContract":"RadarrSettings",
       "fields":[
-        {"name":"baseUrl","value":"http://localhost:7878"},
-        {"name":"prowlarrUrl","value":"http://localhost:9696"},
+        {"name":"baseUrl","value":"http://localhost:7878/radarr"},
+        {"name":"prowlarrUrl","value":"http://gluetun:9696"},
         {"name":"apiKey","value":"'"$RADARR_KEY"'"},
         {"name":"syncCategories","value":[2000,2010,2020,2030,2040,2045,2050,2060,2070,2080]}
       ],"tags":[]}' "$P_AUTH" && log "  ✓ Radarr sync added"
