@@ -53,7 +53,14 @@ qbt.lampa.sadmin.app {
 }
 
 ts.lampa.sadmin.app {
-    reverse_proxy torrserver:8090
+    reverse_proxy torrserver:8090 {
+        flush_interval -1
+        transport http {
+            read_timeout 0
+            write_timeout 0
+            response_header_timeout 120s
+        }
+    }
 }
 
 sp.lampa.sadmin.app {
