@@ -153,14 +153,18 @@ services:
       - "image.tmdb.org:195.181.166.158"
     restart: unless-stopped
 
-  media-cleanup:
-    build: ./cleanup
-    container_name: media-cleanup
+  media-hub:
+    build: ./hub
+    container_name: media-hub
     environment:
       - RADARR_URL=http://gluetun:7878/radarr
       - RADARR_KEY=${RADARR_KEY}
       - SONARR_URL=http://sonarr:8989/sonarr
       - SONARR_KEY=${SONARR_KEY}
+      - JELLYSEERR_URL=http://jellyseerr:5055
+      - JELLYFIN_URL=http://jellyfin:8096/jellyfin
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - PORT=9999
     ports:
       - 127.0.0.1:9999:9999
