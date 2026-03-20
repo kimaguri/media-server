@@ -56,3 +56,8 @@ ts.lampa.sadmin.app {
     import admin_auth
     reverse_proxy torrserver:8090
 }
+
+sp.lampa.sadmin.app {
+    import admin_auth
+    reverse_proxy sportarr:1867
+}
