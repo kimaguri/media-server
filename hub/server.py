@@ -399,19 +399,24 @@ def handle_callback(callback):
         if prefix in state.search_results:
             if action == "cancel":
                 answer_callback(cb_id, "Отменено")
-                edit_message(msg.get("message_id"), "❌ Поиск отменён")
+                edit_message(msg.get("message_id"), "❌ Отменено")
                 state.search_results.pop(prefix, None)
+                state.user_state.pop(chat_id, None)
+                send_telegram("👌")  # Triggers main keyboard
                 return
             try:
                 idx = int(action)
                 releases = state.search_results.get(prefix, [])
                 if 0 <= idx < len(releases):
                     rel = releases[idx]
-                    title = rel.get("title", "?")
-                    answer_callback(cb_id, "Отправлено!")
-                    edit_message(msg.get("message_id"), f"⬇️ <b>Качаем:</b>\n{title}\n{fmt_size(rel.get('size',0))} • {rel.get('indexer','?')}")
-                    threading.Thread(target=do_grab_silent, args=(rel,), daemon=True).start()
+                    answer_callback(cb_id, "Отправлено на скачивание!")
+                    # Remove search results and clear user state
                     state.search_results.pop(prefix, None)
+                    state.user_state.pop(chat_id, None)
+                    # Edit original message to show selection (no duplicate notification)
+                    edit_message(msg.get("message_id"),
+                        f"✅ Выбрано: {rel.get('title','?')[:60]}\n{fmt_size(rel.get('size',0))} • {rel.get('indexer','?')}")
+                    threading.Thread(target=do_grab_silent, args=(rel,), daemon=True).start()
                     return
             except (ValueError, IndexError):
                 pass
