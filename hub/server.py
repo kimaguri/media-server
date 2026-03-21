@@ -96,11 +96,18 @@ def tg(method, data=None):
         return None
 
 
+MAIN_KEYBOARD = {"keyboard": [
+    ["🔍 Поиск", "📊 Статус", "📋 Список"],
+], "resize_keyboard": True, "one_time_keyboard": False}
+
+
 def send_telegram(text, reply_markup=None):
     log(f"TG: {text[:80]}")
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
     if reply_markup:
         data["reply_markup"] = reply_markup
+    else:
+        data["reply_markup"] = MAIN_KEYBOARD
     tg("sendMessage", data)
 
 
@@ -273,33 +280,24 @@ def handle_bot_message(msg):
         return
 
     # Commands
-    if text == "/start" or text == "/help":
-        send_telegram(
-            "🎬 <b>Media Hub Bot</b>\n\n"
-            "/search — поиск фильма, сериала или матча\n"
-            "/status — статус скачиваний\n"
-            "/list — список отслеживаемого\n\n"
-            "Или просто напиши название для поиска",
-            {"inline_keyboard": [
-                [{"text": "🔍 Поиск", "callback_data": "menu:search"}],
-                [{"text": "📊 Статус", "callback_data": "menu:status"}, {"text": "📋 Список", "callback_data": "menu:list"}],
-            ]}
-        )
+    if text in ("/start", "/help"):
+        send_telegram("🎬 <b>Media Hub Bot</b>\n\nИспользуй кнопки внизу или просто напиши название для поиска.")
         return
 
-    if text == "/search":
+    if text in ("🔍 Поиск", "/search"):
         send_telegram("Что ищем?", {"inline_keyboard": [
             [{"text": "🎬 Фильм", "callback_data": "type:movie"},
              {"text": "📺 Сериал", "callback_data": "type:series"},
-             {"text": "⚽ Матч", "callback_data": "type:sport"}],
+             {"text": "⚽ Матч", "callback_data": "type:sport"},
+             {"text": "🔍 Всё", "callback_data": "type:all"}],
         ]})
         return
 
-    if text == "/status":
+    if text in ("📊 Статус", "/status"):
         show_status()
         return
 
-    if text == "/list":
+    if text in ("📋 Список", "/list"):
         show_list()
         return
 
@@ -326,32 +324,13 @@ def handle_callback(callback):
         answer_callback(cb_id)
         return
 
-    # Menu actions
-    if data == "menu:search":
-        answer_callback(cb_id)
-        send_telegram("Что ищем?", {"inline_keyboard": [
-            [{"text": "🎬 Фильм", "callback_data": "type:movie"},
-             {"text": "📺 Сериал", "callback_data": "type:series"},
-             {"text": "⚽ Матч", "callback_data": "type:sport"}],
-        ]})
-        return
-
-    if data == "menu:status":
-        answer_callback(cb_id)
-        show_status()
-        return
-
-    if data == "menu:list":
-        answer_callback(cb_id)
-        show_list()
-        return
-
     # Search type selected
     if data.startswith("type:"):
         search_type = data.split(":")[1]
-        labels = {"movie": "фильма", "series": "сериала", "sport": "матча"}
+        labels = {"movie": "фильма", "series": "сериала", "sport": "матча", "all": ""}
         answer_callback(cb_id)
-        send_telegram(f"Введите название {labels.get(search_type, '')}:")
+        label = labels.get(search_type, "")
+        send_telegram(f"Введите название{' ' + label if label else ''}:")
         state.user_state[chat_id] = {"waiting_query": search_type}
         return
 
