@@ -106,6 +106,8 @@ def send_telegram(text, reply_markup=None):
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
     if reply_markup:
         data["reply_markup"] = reply_markup
+    elif any(u.get("waiting_query") for u in state.user_state.values()):
+        data["reply_markup"] = {"keyboard": [["❌ Отмена"]], "resize_keyboard": True}
     else:
         data["reply_markup"] = MAIN_KEYBOARD
     tg("sendMessage", data)
@@ -352,10 +354,10 @@ def handle_callback(callback):
                 releases = state.search_results.get(prefix, [])
                 if 0 <= idx < len(releases):
                     rel = releases[idx]
-                    answer_callback(cb_id, "Скачиваем...")
-                    title = rel.get("title", "?")[:60]
-                    edit_message(msg.get("message_id"), f"⬇️ <b>Скачиваем:</b>\n{title}")
-                    threading.Thread(target=do_grab, args=(rel,), daemon=True).start()
+                    title = rel.get("title", "?")
+                    answer_callback(cb_id, "Отправлено!")
+                    edit_message(msg.get("message_id"), f"⬇️ <b>Качаем:</b>\n{title}\n{fmt_size(rel.get('size',0))} • {rel.get('indexer','?')}")
+                    threading.Thread(target=do_grab_silent, args=(rel,), daemon=True).start()
                     state.search_results.pop(prefix, None)
                     return
             except (ValueError, IndexError):
@@ -366,7 +368,6 @@ def handle_callback(callback):
 
 def do_search(query, search_type):
     """Perform search in background thread."""
-    send_telegram(f"🔍 <b>Ищем:</b> {query}...")
     results = prowlarr_search(query)
 
     # Filter by type
@@ -388,24 +389,15 @@ def do_search(query, search_type):
     send_search_results(query, results, prefix)
 
 
-def do_grab(release):
-    """Grab a release in background thread."""
-    download_url = release.get("downloadUrl", "")
-    if not download_url:
-        send_telegram("❌ Нет ссылки для скачивания")
-        return
-    # Send to Prowlarr download client
+def do_grab_silent(release):
+    """Grab a release silently (no extra messages)."""
     indexer_id = release.get("indexerId", 0)
     guid = release.get("guid", "")
     result = api_post(f"{PROWLARR_URL}/api/v1/search", PROWLARR_KEY, {
         "guid": guid, "indexerId": indexer_id,
     })
-    if result:
-        send_telegram(f"✅ <b>Отправлено в qBittorrent</b>")
-    else:
-        # Fallback: grab via download URL
-        log(f"Prowlarr grab failed, trying downloadUrl directly")
-        send_telegram(f"⚠️ Прямая загрузка не через Prowlarr — попробуйте через Prowlarr UI")
+    if not result:
+        log(f"Prowlarr grab failed for {release.get('title','?')[:50]}")
 
 
 def show_status():
