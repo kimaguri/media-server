@@ -288,9 +288,13 @@ def handle_bot_message(msg):
         send_telegram("Что ищем?", {"inline_keyboard": [
             [{"text": "🎬 Фильм", "callback_data": "type:movie"},
              {"text": "📺 Сериал", "callback_data": "type:series"},
-             {"text": "⚽ Матч", "callback_data": "type:sport"},
-             {"text": "🔍 Всё", "callback_data": "type:all"}],
+             {"text": "⚽ Матч", "callback_data": "type:sport"}],
         ]})
+        return
+
+    if text == "❌ Отмена":
+        state.user_state.pop(chat_id, None)
+        send_telegram("👌 Отменено")
         return
 
     if text in ("📊 Статус", "/status"):
@@ -327,10 +331,10 @@ def handle_callback(callback):
     # Search type selected
     if data.startswith("type:"):
         search_type = data.split(":")[1]
-        labels = {"movie": "фильма", "series": "сериала", "sport": "матча", "all": ""}
+        labels = {"movie": "фильма", "series": "сериала", "sport": "матча"}
         answer_callback(cb_id)
         label = labels.get(search_type, "")
-        send_telegram(f"Введите название{' ' + label if label else ''}:")
+        send_telegram(f"Введите название {label}:", {"keyboard": [["❌ Отмена"]], "resize_keyboard": True})
         state.user_state[chat_id] = {"waiting_query": search_type}
         return
 
@@ -596,9 +600,13 @@ def telegram_loop():
     offset = 0
     while True:
         try:
-            result = tg("getUpdates", {"offset": offset, "timeout": 10})
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={offset}&timeout=5"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                result = json.loads(resp.read())
             if not result or not result.get("ok"):
-                time.sleep(5); continue
+                time.sleep(2)
+                continue
             for update in result.get("result", []):
                 offset = update["update_id"] + 1
                 if "message" in update:
@@ -607,7 +615,7 @@ def telegram_loop():
                     threading.Thread(target=handle_callback, args=(update["callback_query"],), daemon=True).start()
         except Exception as e:
             log(f"TG poll error: {e}")
-            time.sleep(10)
+            time.sleep(5)
 
 
 # ── Main polling ─────────────────────────────────────────────────────────
