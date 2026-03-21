@@ -608,15 +608,15 @@ def telegram_loop():
     offset = 0
     while True:
         try:
-            result = tg("getUpdates", {"offset": offset, "timeout": 30})
+            result = tg("getUpdates", {"offset": offset, "timeout": 10})
             if not result or not result.get("ok"):
                 time.sleep(5); continue
             for update in result.get("result", []):
                 offset = update["update_id"] + 1
                 if "message" in update:
-                    handle_bot_message(update["message"])
+                    threading.Thread(target=handle_bot_message, args=(update["message"],), daemon=True).start()
                 elif "callback_query" in update:
-                    handle_callback(update["callback_query"])
+                    threading.Thread(target=handle_callback, args=(update["callback_query"],), daemon=True).start()
         except Exception as e:
             log(f"TG poll error: {e}")
             time.sleep(10)
