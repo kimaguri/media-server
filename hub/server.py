@@ -223,13 +223,14 @@ def send_search_results(query, results, callback_prefix):
 
     for i, r in enumerate(filtered):
         idx = r.get("indexer", "?")
-        title = r.get("title", "?")[:65]
+        title = r.get("title", "?")
         size = fmt_size(r.get("size", 0))
         seeders = r.get("seeders", 0)
-        cat_names = ", ".join([c.get("name", "") for c in r.get("categories", []) if c.get("name")])[:20]
         icon = "🟢" if seeders >= 10 else "🟡" if seeders >= 3 else "🔴"
+        # Short title for button, full for message
+        btn_title = title[:45] + "…" if len(title) > 45 else title
         lines.append(f"{icon} <b>{i+1}.</b> {size} 🌱{seeders} <i>{idx}</i>\n{title}\n")
-        buttons.append([{"text": f"{i+1}. {size} 🌱{seeders} — {idx}", "callback_data": f"{callback_prefix}:{i}"}])
+        buttons.append([{"text": f"{i+1}. {size} 🌱{seeders} — {btn_title}", "callback_data": f"{callback_prefix}:{i}"}])
 
     buttons.append([{"text": "❌ Отмена", "callback_data": f"{callback_prefix}:cancel"}])
     send_telegram("\n".join(lines), {"inline_keyboard": buttons})
