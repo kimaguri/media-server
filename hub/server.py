@@ -201,6 +201,12 @@ class State:
                         break
             self.notified_progress[dl_id] = ms
             self.queue_items[dl_id] = {"title": title, "pct": pct}
+        # Detect completed downloads and trigger rescan
+        finished = [k for k in self.queue_items if k not in current]
+        if finished and self.initialized:
+            for k in finished:
+                log(f"Download finished: {self.queue_items[k]['title'][:50]}")
+            trigger_rescan()
         for k in [k for k in self.notified_progress if k not in current]: del self.notified_progress[k]
         for k in [k for k in self.queue_items if k not in current]: del self.queue_items[k]
 
@@ -253,21 +259,68 @@ def send_search_results(query, results, callback_prefix):
     send_telegram("\n".join(lines), {"inline_keyboard": buttons})
 
 
-def grab_from_prowlarr(release):
-    """Download a release found via Prowlarr."""
-    guid = release.get("guid", "")
-    indexer_id = release.get("indexerId", 0)
-    download_url = release.get("downloadUrl", "")
-    # Try direct grab via Prowlarr
+def classify_release(release):
+    """Determine if release is movie, series, or sport based on categories."""
+    cats = release.get("categories", [])
+    cat_names = " ".join(c.get("name", "") for c in cats)
+    if "Movie" in cat_names:
+        return "movie"
+    elif "TV" in cat_names:
+        return "series"
+    elif "Sport" in cat_names:
+        return "sport"
+    return "unknown"
+
+
+def push_to_radarr(release):
+    """Push release to Radarr for proper import pipeline."""
+    payload = {
+        "title": release.get("title", ""),
+        "downloadUrl": release.get("downloadUrl", ""),
+        "protocol": "torrent",
+        "publishDate": release.get("publishDate", "2026-01-01T00:00:00Z"),
+    }
+    indexer = release.get("indexer", "")
+    if indexer:
+        payload["indexer"] = indexer
+    result = api_post(f"{RADARR_URL}/api/v3/release/push", RADARR_KEY, [payload])
+    if result:
+        log(f"Pushed to Radarr: {release.get('title','?')[:50]}")
+        return True
+    log(f"Radarr push failed")
+    return False
+
+
+def push_to_sonarr(release):
+    """Push release to Sonarr for proper import pipeline."""
+    payload = {
+        "title": release.get("title", ""),
+        "downloadUrl": release.get("downloadUrl", ""),
+        "protocol": "torrent",
+        "publishDate": release.get("publishDate", "2026-01-01T00:00:00Z"),
+    }
+    indexer = release.get("indexer", "")
+    if indexer:
+        payload["indexer"] = indexer
+    result = api_post(f"{SONARR_URL}/api/v3/release/push", SONARR_KEY, [payload])
+    if result:
+        log(f"Pushed to Sonarr: {release.get('title','?')[:50]}")
+        return True
+    log(f"Sonarr push failed")
+    return False
+
+
+def push_to_prowlarr(release):
+    """Grab directly via Prowlarr (for sports and fallback)."""
     result = api_post(f"{PROWLARR_URL}/api/v1/search", PROWLARR_KEY, {
-        "guid": guid, "indexerId": indexer_id
+        "guid": release.get("guid", ""),
+        "indexerId": release.get("indexerId", 0),
     })
-    if not result:
-        # Fallback: use download URL directly with qBittorrent
-        log(f"Prowlarr grab failed, using downloadUrl")
-        if download_url:
-            return download_url
-    return result
+    if result:
+        log(f"Grabbed via Prowlarr: {release.get('title','?')[:50]}")
+        return True
+    log(f"Prowlarr grab failed")
+    return False
 
 
 # ── Telegram Bot Commands ────────────────────────────────────────────────
@@ -390,14 +443,35 @@ def do_search(query, search_type):
 
 
 def do_grab_silent(release):
-    """Grab a release silently (no extra messages)."""
-    indexer_id = release.get("indexerId", 0)
-    guid = release.get("guid", "")
-    result = api_post(f"{PROWLARR_URL}/api/v1/search", PROWLARR_KEY, {
-        "guid": guid, "indexerId": indexer_id,
-    })
-    if not result:
-        log(f"Prowlarr grab failed for {release.get('title','?')[:50]}")
+    """Route release through Sonarr/Radarr for proper import, or Prowlarr for sports."""
+    rtype = classify_release(release)
+    title = release.get("title", "?")[:60]
+
+    if rtype == "movie":
+        if not push_to_radarr(release):
+            log(f"Radarr push failed, falling back to Prowlarr")
+            push_to_prowlarr(release)
+    elif rtype == "series":
+        if not push_to_sonarr(release):
+            log(f"Sonarr push failed, falling back to Prowlarr")
+            push_to_prowlarr(release)
+    else:
+        # Sport or unknown — use Prowlarr directly
+        push_to_prowlarr(release)
+
+
+def trigger_rescan():
+    """Tell Sonarr/Radarr to rescan downloads and Jellyfin to refresh library."""
+    api_post(f"{SONARR_URL}/api/v3/command", SONARR_KEY, {"name": "DownloadedEpisodesScan"})
+    api_post(f"{RADARR_URL}/api/v3/command", RADARR_KEY, {"name": "DownloadedMoviesScan"})
+    try:
+        jf_token = os.environ.get("JELLYFIN_TOKEN", "b21df330768e467a9120d6c60dfe43be")
+        req = urllib.request.Request(f"{JELLYFIN_URL}/Library/Refresh", method="POST",
+            headers={"Authorization": f'MediaBrowser Token="{jf_token}"'})
+        urllib.request.urlopen(req, timeout=10)
+    except Exception:
+        pass
+    log("Rescan triggered: Sonarr + Radarr + Jellyfin")
 
 
 def show_status():
