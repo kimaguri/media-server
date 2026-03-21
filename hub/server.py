@@ -138,20 +138,28 @@ class State:
             if not monitored:
                 continue
             prev = self.movies.get(mid)
-            if prev and self.initialized:
+
+            # First load — record state silently, no notifications
+            if not self.initialized:
+                ns = "done" if has_file else ("nf" if status == "released" else f"w_{status}" if status in ("announced", "inCinemas") else None)
+                self.movies[mid] = {"title": title, "status": status, "hasFile": has_file, "ns": ns}
+                continue
+
+            if prev:
                 n = prev.get("ns")
-                if status == "released" and not has_file and n != "nf":
+                # Only notify on STATE CHANGES (not on every poll)
+                if status == "released" and not has_file and prev.get("status") != "released":
                     send_telegram(f"❌ <b>Не найдено:</b> {title}\nНет подходящих релизов")
-                    self.movies[mid]["ns"] = "nf"
+                    self.movies[mid] = {"title": title, "status": status, "hasFile": has_file, "ns": "nf"}
                     continue
-                if status in ("announced", "inCinemas") and n != f"w_{status}":
+                if status in ("announced", "inCinemas") and n != f"w_{status}" and prev.get("status") != status:
                     label = "Ожидаем выхода" if status == "announced" else "В кинотеатрах"
                     send_telegram(f"⏳ <b>{label}:</b> {title} ({m.get('year', '')})")
-                    self.movies[mid]["ns"] = f"w_{status}"
+                    self.movies[mid] = {"title": title, "status": status, "hasFile": has_file, "ns": f"w_{status}"}
                     continue
                 if has_file and not prev.get("hasFile"):
                     send_telegram(f"✅ <b>Готово:</b> {title}\nДоступно в Jellyfin")
-                    self.movies[mid]["ns"] = "done"
+                    self.movies[mid] = {"title": title, "status": status, "hasFile": has_file, "ns": "done"}
                     continue
             self.movies[mid] = {"title": title, "status": status, "hasFile": has_file, "ns": self.movies.get(mid, {}).get("ns")}
 
