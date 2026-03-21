@@ -441,18 +441,37 @@ def show_status():
 
 
 def show_list():
-    lines = ["📋 <b>Отслеживаемое</b>\n"]
-    if state.movies:
-        lines.append("<b>Фильмы:</b>")
-        for m in state.movies.values():
-            icon = "✅" if m["hasFile"] else "⏳" if m["status"] in ("announced", "inCinemas") else "🔍"
-            lines.append(f"  {icon} {m['title']}")
-    if state.series:
-        lines.append("\n<b>Сериалы:</b>")
-        for s in state.series.values():
-            lines.append(f"  📺 {s['title']} ({s['files']}/{s['total']})")
-    if not state.movies and not state.series:
-        lines.append("Пусто")
+    lines = ["📋 <b>Мониторинг</b>\n"]
+    has_any = False
+
+    # Movies waiting for release
+    waiting = [m for m in state.movies.values() if m["status"] in ("announced", "inCinemas") and not m["hasFile"]]
+    if waiting:
+        has_any = True
+        lines.append("<b>⏳ Ожидаем выхода:</b>")
+        for m in waiting:
+            label = "анонсирован" if m["status"] == "announced" else "в кинотеатрах"
+            lines.append(f"  • {m['title']} ({label})")
+
+    # Movies released but not downloaded
+    searching = [m for m in state.movies.values() if m["status"] == "released" and not m["hasFile"]]
+    if searching:
+        has_any = True
+        lines.append("\n<b>🔍 Ищем релизы:</b>")
+        for m in searching:
+            lines.append(f"  • {m['title']}")
+
+    # Continuing series (waiting for new episodes)
+    continuing = [s for s in state.series.values() if s["status"] == "continuing"]
+    if continuing:
+        has_any = True
+        lines.append("\n<b>📺 Ждём новых серий:</b>")
+        for s in continuing:
+            lines.append(f"  • {s['title']} ({s['files']}/{s['total']} серий)")
+
+    if not has_any:
+        lines.append("Всё скачано, нечего ждать 🎉")
+
     send_telegram("\n".join(lines))
 
 
