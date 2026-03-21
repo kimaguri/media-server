@@ -401,11 +401,41 @@ def do_grab_silent(release):
 
 
 def show_status():
-    lines = ["📊 <b>Статус скачиваний</b>\n"]
+    lines = ["📊 <b>Статус</b>\n"]
+    has_any = False
     if state.queue_items:
+        has_any = True
         for dl_id, info in state.queue_items.items():
             lines.append(f"⬇️ {info['title'][:50]}\n   {info['pct']}%\n")
-    else:
+    # Also check qBittorrent directly for seeding/moving
+    try:
+        qb_url = "http://qbittorrent:8080/api/v2"
+        # Login
+        login_data = urllib.parse.urlencode({"username": "admin", "password": os.environ.get("QB_PASSWORD", "")}).encode()
+        req = urllib.request.Request(f"{qb_url}/auth/login", data=login_data)
+        req.add_header("Referer", qb_url)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            cookie = resp.headers.get("Set-Cookie", "")
+        # Get torrents
+        req2 = urllib.request.Request(f"{qb_url}/torrents/info")
+        req2.add_header("Cookie", cookie)
+        with urllib.request.urlopen(req2, timeout=5) as resp2:
+            torrents = json.loads(resp2.read())
+        for t in torrents:
+            has_any = True
+            pct = int(t.get("progress", 0) * 100)
+            st = t.get("state", "")
+            name = t.get("name", "?")[:50]
+            speed = t.get("dlspeed", 0) / (1024 * 1024)
+            if st in ("downloading", "forcedDL", "stalledDL"):
+                lines.append(f"⬇️ {name}\n   {pct}% • {speed:.1f} MB/s\n")
+            elif st == "moving":
+                lines.append(f"📦 {name}\n   Перемещение на хранилище\n")
+            elif st in ("uploading", "forcedUP", "stalledUP"):
+                lines.append(f"🌱 {name}\n   Раздача ({fmt_size(t.get('uploaded',0))} отдано)\n")
+    except Exception as e:
+        log(f"QB status error: {e}")
+    if not has_any:
         lines.append("Нет активных скачиваний")
     send_telegram("\n".join(lines))
 
