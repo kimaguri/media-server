@@ -847,6 +847,31 @@ def handle_sonarr_webhook(data):
         send_telegram(f"🗑 <b>Удалён:</b> {title}")
 
 
+def _qb_delete_torrents(search_name):
+    """Delete torrents from qBittorrent whose name contains search_name."""
+    try:
+        qb_url = "http://qbittorrent:8080/api/v2"
+        login_data = urllib.parse.urlencode({"username": "admin", "password": os.environ.get("QB_PASSWORD", "")}).encode()
+        req = urllib.request.Request(f"{qb_url}/auth/login", data=login_data)
+        req.add_header("Referer", qb_url)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            cookie = resp.headers.get("Set-Cookie", "")
+        req2 = urllib.request.Request(f"{qb_url}/torrents/info")
+        req2.add_header("Cookie", cookie)
+        with urllib.request.urlopen(req2, timeout=5) as resp2:
+            torrents = json.loads(resp2.read())
+        search_lower = search_name.lower()
+        hashes = [t["hash"] for t in torrents if search_lower in t.get("name", "").lower()]
+        if hashes:
+            data = urllib.parse.urlencode({"hashes": "|".join(hashes), "deleteFiles": "true"}).encode()
+            req3 = urllib.request.Request(f"{qb_url}/torrents/delete", data=data)
+            req3.add_header("Cookie", cookie)
+            urllib.request.urlopen(req3, timeout=10)
+            log(f"Deleted {len(hashes)} torrents from qBit for: {search_name}")
+    except Exception as e:
+        log(f"qBit delete error: {e}")
+
+
 def handle_jellyfin_webhook(data):
     if data.get("NotificationType") != "ItemDeleted":
         return
@@ -863,6 +888,8 @@ def handle_jellyfin_webhook(data):
                     if m.get("tmdbId") == tid:
                         api_delete(f"{RADARR_URL}/api/v3/movie/{m['id']}?deleteFiles=true", RADARR_KEY)
                         log(f"Deleted from Radarr: {name}")
+                        _qb_delete_torrents(m.get("title", name))
+                        send_telegram(f"🗑 <b>Удалено:</b> {name}\nRadarr + торренты очищены")
                         return
         except ValueError: pass
     elif item_type in ("Series", "Season", "Episode") and tvdb:
@@ -874,6 +901,8 @@ def handle_jellyfin_webhook(data):
                     if s.get("tvdbId") == tid:
                         api_delete(f"{SONARR_URL}/api/v3/series/{s['id']}?deleteFiles=true", SONARR_KEY)
                         log(f"Deleted from Sonarr: {name}")
+                        _qb_delete_torrents(s.get("title", name))
+                        send_telegram(f"🗑 <b>Удалено:</b> {name}\nSonarr + торренты очищены")
                         return
         except ValueError: pass
 

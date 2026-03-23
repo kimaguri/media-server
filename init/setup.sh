@@ -355,7 +355,7 @@ else
   log "  Adding qBittorrent..."
   api_call POST "$S_URL/api/v3/downloadclient" '{
     "enable":true,"protocol":"torrent","priority":1,
-    "removeCompletedDownloads":true,"removeFailedDownloads":true,
+    "removeCompletedDownloads":false,"removeFailedDownloads":true,
     "name":"qBittorrent","implementation":"QBittorrent","configContract":"QBittorrentSettings",
     "fields":[
       {"name":"host","value":"qbittorrent"},{"name":"port","value":8080},
@@ -395,7 +395,7 @@ else
   log "  Adding qBittorrent..."
   api_call POST "$R_URL/api/v3/downloadclient" '{
     "enable":true,"protocol":"torrent","priority":1,
-    "removeCompletedDownloads":true,"removeFailedDownloads":true,
+    "removeCompletedDownloads":false,"removeFailedDownloads":true,
     "name":"qBittorrent","implementation":"QBittorrent","configContract":"QBittorrentSettings",
     "fields":[
       {"name":"host","value":"qbittorrent"},{"name":"port","value":8080},
