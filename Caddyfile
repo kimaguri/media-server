@@ -26,10 +26,6 @@ lampa.sadmin.app {
         import admin_auth
         reverse_proxy bazarr:6767
     }
-    handle /deleterr* {
-        import admin_auth
-        reverse_proxy deleterr:8082
-    }
     handle /jellyfin* {
         reverse_proxy jellyfin:8096
     }

@@ -151,7 +151,7 @@ echo ""
 # ============================================
 # Phase 1: Wait for all services
 # ============================================
-step "1/10: Waiting for services..."
+step "1/13: Waiting for services..."
 
 wait_for_service "qBittorrent" "http://127.0.0.1:8080"
 wait_for_service "Sonarr" "http://127.0.0.1:8989"
@@ -167,7 +167,7 @@ echo ""
 # Phase 2: Set URL Bases + Auth in config.xml
 # Done AFTER services started (so config.xml exists)
 # ============================================
-step "2/10: Setting URL Bases and Auth..."
+step "2/13: Setting URL Bases and Auth..."
 
 for pair in "sonarr:sonarr" "radarr:radarr" "prowlarr:prowlarr"; do
   svc="${pair%%:*}"
@@ -197,7 +197,7 @@ echo ""
 # ============================================
 # Phase 3: Get API keys
 # ============================================
-step "3/10: Reading API keys..."
+step "3/13: Reading API keys..."
 
 SONARR_KEY=$(get_api_key /config/sonarr/config.xml)
 RADARR_KEY=$(get_api_key /config/radarr/config.xml)
@@ -212,7 +212,7 @@ echo ""
 # ============================================
 # Phase 4: Configure Jellyfin
 # ============================================
-step "4/10: Configuring Jellyfin..."
+step "4/13: Configuring Jellyfin..."
 
 JF_BASE="http://127.0.0.1:8096"
 JF_AUTH_HEADER='Authorization: MediaBrowser Client="Setup", Device="Init", DeviceId="media-init", Version="1.0"'
@@ -269,6 +269,15 @@ if api_call GET "$JF_BASE/Startup/Configuration"; then
       else
         warn "  TV Shows library may already exist"
       fi
+
+      # Add Sports library
+      if api_call POST "$JF_BASE/Library/VirtualFolders?name=Sports&collectionType=homevideos&refreshLibrary=false" \
+        '{"LibraryOptions":{"PathInfos":[{"Path":"/sports"}],"EnableRealtimeMonitor":true}}' \
+        "$JF_TOKEN_HEADER"; then
+        log "  ✓ Sports library added"
+      else
+        warn "  Sports library may already exist"
+      fi
     else
       error "  Could not get auth token"
     fi
@@ -284,7 +293,7 @@ echo ""
 # ============================================
 # Phase 5: Configure qBittorrent
 # ============================================
-step "5/10: Configuring qBittorrent..."
+step "5/13: Configuring qBittorrent..."
 
 QB_COOKIE=""
 
@@ -314,15 +323,17 @@ if [ -n "$QB_COOKIE" ]; then
 
   # Set preferences + new password
   curl -s -b "SID=$QB_COOKIE" "http://127.0.0.1:8080/api/v2/app/setPreferences" \
-    --data-urlencode "json={\"save_path\":\"/downloads/complete/\",\"temp_path_enabled\":true,\"temp_path\":\"/downloads/incomplete/\",\"web_ui_password\":\"${QB_PASSWORD:-adminadmin}\"}" > /dev/null 2>&1
-  log "  ✓ Download paths set"
+    --data-urlencode "json={\"save_path\":\"/downloads/complete/\",\"temp_path_enabled\":true,\"temp_path\":\"/downloads-local/incomplete/\",\"max_active_downloads\":1,\"max_active_uploads\":3,\"max_active_torrents\":1,\"web_ui_password\":\"${QB_PASSWORD:-adminadmin}\"}" > /dev/null 2>&1
+  log "  ✓ Download paths + limits set (max 1 active, temp on local SSD)"
 
   # Create categories
   curl -s -b "SID=$QB_COOKIE" "http://127.0.0.1:8080/api/v2/torrents/createCategory" \
     --data-urlencode "category=tv" --data-urlencode "savePath=/downloads/complete/" > /dev/null 2>&1
   curl -s -b "SID=$QB_COOKIE" "http://127.0.0.1:8080/api/v2/torrents/createCategory" \
     --data-urlencode "category=movies" --data-urlencode "savePath=/downloads/complete/" > /dev/null 2>&1
-  log "  ✓ Categories created (tv, movies)"
+  curl -s -b "SID=$QB_COOKIE" "http://127.0.0.1:8080/api/v2/torrents/createCategory" \
+    --data-urlencode "category=sports" --data-urlencode "savePath=/downloads/complete/" > /dev/null 2>&1
+  log "  ✓ Categories created (tv, movies, sports)"
 else
   error "  qBittorrent login failed"
 fi
@@ -332,7 +343,7 @@ echo ""
 # ============================================
 # Phase 6: Configure Sonarr
 # ============================================
-step "6/10: Configuring Sonarr..."
+step "6/13: Configuring Sonarr..."
 
 S_URL="http://127.0.0.1:8989"
 S_AUTH="X-Api-Key: $SONARR_KEY"
@@ -372,7 +383,7 @@ echo ""
 # ============================================
 # Phase 7: Configure Radarr
 # ============================================
-step "7/10: Configuring Radarr..."
+step "7/13: Configuring Radarr..."
 
 R_URL="http://127.0.0.1:7878"
 R_AUTH="X-Api-Key: $RADARR_KEY"
@@ -407,12 +418,32 @@ else
   verify_exists "$R_URL/api/v3/rootfolder" "/movies" "$R_AUTH" "Radarr root folder"
 fi
 
+# Update quality profile: Russian language + upgrade allowed
+log "  Updating quality profile (Russian + upgrade)..."
+if api_call GET "$R_URL/api/v3/qualityprofile" "" "$R_AUTH"; then
+  PROFILE_ID=$(echo "$API_BODY" | python3 -c "import sys,json; profiles=json.load(sys.stdin); print(profiles[0]['id'] if profiles else '')" 2>/dev/null) || true
+  if [ -n "$PROFILE_ID" ]; then
+    PROFILE_DATA=$(echo "$API_BODY" | python3 -c "
+import sys,json
+profiles=json.load(sys.stdin)
+p=profiles[0]
+p['upgradeAllowed']=True
+p['language']={'id':11,'name':'Russian'}
+print(json.dumps(p))
+" 2>/dev/null) || true
+    if [ -n "$PROFILE_DATA" ]; then
+      api_call PUT "$R_URL/api/v3/qualityprofile/$PROFILE_ID" "$PROFILE_DATA" "$R_AUTH" \
+        && log "  ✓ Quality profile: Russian, upgradeAllowed"
+    fi
+  fi
+fi
+
 echo ""
 
 # ============================================
 # Phase 8: Configure Prowlarr
 # ============================================
-step "8/10: Configuring Prowlarr..."
+step "8/13: Configuring Prowlarr..."
 
 P_URL="http://127.0.0.1:9696"
 P_AUTH="X-Api-Key: $PROWLARR_KEY"
@@ -466,6 +497,61 @@ else
   warn "  RuTracker skipped (no credentials)"
 fi
 
+# ThePirateBay
+if api_call GET "$P_URL/api/v1/indexer" "" "$P_AUTH" && echo "$API_BODY" | grep -q "ThePirateBay"; then
+  log "  ThePirateBay already exists"
+else
+  log "  Adding ThePirateBay..."
+  api_call POST "$P_URL/api/v1/indexer" '{
+    "name":"ThePirateBay","definitionName":"thepiratebay",
+    "implementation":"Cardigann","configContract":"CardigannSettings",
+    "enable":true,"supportsRss":true,"supportsSearch":true,
+    "appProfileId":1,"protocol":"torrent","privacy":"public","priority":25,
+    "fields":[
+      {"name":"definitionFile","value":"thepiratebay"},
+      {"name":"baseUrl","value":"https://thepiratebay.org/"},
+      {"name":"torrentBaseSettings.appMinimumSeeders","value":""},
+      {"name":"torrentBaseSettings.seedRatio","value":""},
+      {"name":"torrentBaseSettings.seedTime","value":""}
+    ],"tags":[]}' "$P_AUTH" && log "  ✓ ThePirateBay added"
+fi
+
+# YTS
+if api_call GET "$P_URL/api/v1/indexer" "" "$P_AUTH" && echo "$API_BODY" | grep -q "YTS"; then
+  log "  YTS already exists"
+else
+  log "  Adding YTS..."
+  api_call POST "$P_URL/api/v1/indexer" '{
+    "name":"YTS","definitionName":"yts",
+    "implementation":"Cardigann","configContract":"CardigannSettings",
+    "enable":true,"supportsRss":true,"supportsSearch":true,
+    "appProfileId":1,"protocol":"torrent","privacy":"public","priority":25,
+    "fields":[
+      {"name":"definitionFile","value":"yts"},
+      {"name":"baseUrl","value":"https://yts.mx/"},
+      {"name":"torrentBaseSettings.appMinimumSeeders","value":""},
+      {"name":"torrentBaseSettings.seedRatio","value":""},
+      {"name":"torrentBaseSettings.seedTime","value":""}
+    ],"tags":[]}' "$P_AUTH" && log "  ✓ YTS added"
+fi
+
+# Download client (qBittorrent — for sports direct grabs)
+if api_call GET "$P_URL/api/v1/downloadclient" "" "$P_AUTH" && echo "$API_BODY" | grep -q "qBittorrent"; then
+  log "  Prowlarr download client already exists"
+else
+  log "  Adding qBittorrent to Prowlarr (for sports)..."
+  api_call POST "$P_URL/api/v1/downloadclient" '{
+    "enable":true,"protocol":"torrent","priority":1,
+    "name":"qBittorrent","implementation":"QBittorrent","configContract":"QBittorrentSettings",
+    "fields":[
+      {"name":"host","value":"qbittorrent"},{"name":"port","value":8080},
+      {"name":"useSsl","value":false},{"name":"urlBase","value":""},
+      {"name":"username","value":"admin"},{"name":"password","value":"'"${QB_PASSWORD:-adminadmin}"'"},
+      {"name":"category","value":"sports"},{"name":"priority","value":0},
+      {"name":"initialState","value":0}
+    ],"tags":[],"categories":[]}' "$P_AUTH" && log "  ✓ Prowlarr download client added"
+fi
+
 # App sync
 if api_call GET "$P_URL/api/v1/applications" "" "$P_AUTH"; then
   APPS_BODY="$API_BODY"
@@ -479,7 +565,7 @@ if api_call GET "$P_URL/api/v1/applications" "" "$P_AUTH"; then
       "implementation":"Sonarr","configContract":"SonarrSettings",
       "fields":[
         {"name":"baseUrl","value":"http://sonarr:8989/sonarr"},
-        {"name":"prowlarrUrl","value":"http://gluetun:9696"},
+        {"name":"prowlarrUrl","value":"http://gluetun:9696/prowlarr"},
         {"name":"apiKey","value":"'"$SONARR_KEY"'"},
         {"name":"syncCategories","value":[5000,5010,5020,5030,5040,5045,5050,5070]},
         {"name":"animeSyncCategories","value":[5070]}
@@ -494,12 +580,72 @@ if api_call GET "$P_URL/api/v1/applications" "" "$P_AUTH"; then
       "name":"Radarr","syncLevel":"fullSync",
       "implementation":"Radarr","configContract":"RadarrSettings",
       "fields":[
-        {"name":"baseUrl","value":"http://localhost:7878/radarr"},
-        {"name":"prowlarrUrl","value":"http://gluetun:9696"},
+        {"name":"baseUrl","value":"http://gluetun:7878/radarr"},
+        {"name":"prowlarrUrl","value":"http://gluetun:9696/prowlarr"},
         {"name":"apiKey","value":"'"$RADARR_KEY"'"},
         {"name":"syncCategories","value":[2000,2010,2020,2030,2040,2045,2050,2060,2070,2080]}
       ],"tags":[]}' "$P_AUTH" && log "  ✓ Radarr sync added"
   fi
+fi
+
+# Trigger indexer sync to push indexers to Radarr/Sonarr
+log "  Triggering indexer sync..."
+api_call POST "$P_URL/api/v1/command" '{"name":"AppIndexerSync"}' "$P_AUTH" && log "  ✓ Sync triggered"
+sleep 5
+
+echo ""
+
+# ============================================
+# Phase 8b: Configure Webhooks (Radarr/Sonarr/Prowlarr → media-hub)
+# ============================================
+step "9/13: Configuring webhooks..."
+
+# Radarr webhook
+if api_call GET "$R_URL/api/v3/notification" "" "$R_AUTH" && echo "$API_BODY" | grep -q "media-hub\|Media Hub"; then
+  log "  Radarr webhook already exists"
+else
+  log "  Adding Radarr → media-hub webhook..."
+  api_call POST "$R_URL/api/v3/notification" '{
+    "name":"Media Hub","implementation":"Webhook","configContract":"WebhookSettings",
+    "onGrab":true,"onDownload":true,"onUpgrade":true,"onMovieAdded":true,"onMovieDelete":true,"onMovieFileDelete":true,"onHealthIssue":true,
+    "fields":[
+      {"name":"url","value":"http://media-hub:9999/radarr"},
+      {"name":"method","value":1},
+      {"name":"username","value":""},
+      {"name":"password","value":""}
+    ],"tags":[]}' "$R_AUTH" && log "  ✓ Radarr webhook added"
+fi
+
+# Sonarr webhook
+if api_call GET "$S_URL/api/v3/notification" "" "$S_AUTH" && echo "$API_BODY" | grep -q "media-hub\|Media Hub"; then
+  log "  Sonarr webhook already exists"
+else
+  log "  Adding Sonarr → media-hub webhook..."
+  api_call POST "$S_URL/api/v3/notification" '{
+    "name":"Media Hub","implementation":"Webhook","configContract":"WebhookSettings",
+    "onGrab":true,"onDownload":true,"onUpgrade":true,"onSeriesAdd":true,"onSeriesDelete":true,"onEpisodeFileDelete":true,"onHealthIssue":true,
+    "fields":[
+      {"name":"url","value":"http://media-hub:9999/sonarr"},
+      {"name":"method","value":1},
+      {"name":"username","value":""},
+      {"name":"password","value":""}
+    ],"tags":[]}' "$S_AUTH" && log "  ✓ Sonarr webhook added"
+fi
+
+# Prowlarr webhook
+if api_call GET "$P_URL/api/v1/notification" "" "$P_AUTH" && echo "$API_BODY" | grep -q "media-hub\|Media Hub"; then
+  log "  Prowlarr webhook already exists"
+else
+  log "  Adding Prowlarr → media-hub webhook..."
+  api_call POST "$P_URL/api/v1/notification" '{
+    "name":"Media Hub","implementation":"Webhook","configContract":"WebhookSettings",
+    "onHealthIssue":true,"onGrab":true,
+    "fields":[
+      {"name":"url","value":"http://media-hub:9999/prowlarr"},
+      {"name":"method","value":1},
+      {"name":"username","value":""},
+      {"name":"password","value":""}
+    ],"tags":[]}' "$P_AUTH" && log "  ✓ Prowlarr webhook added"
 fi
 
 echo ""
@@ -507,7 +653,7 @@ echo ""
 # ============================================
 # Phase 9: Configure Bazarr
 # ============================================
-step "9/10: Configuring Bazarr..."
+step "10/13: Configuring Bazarr..."
 
 BAZARR_CFG="/config/bazarr/config/config.yaml"
 if [ -f "$BAZARR_CFG" ]; then
@@ -537,7 +683,7 @@ echo ""
 # Phase 10: Set Jellyfin Base URL + Restart services
 # Must happen BEFORE Jellyseerr setup (needs working Jellyfin)
 # ============================================
-step "10/12: Applying URL Base + restarting services..."
+step "11/13: Applying URL Base + restarting services..."
 
 JF_NET="/config/jellyfin/config/network.xml"
 if [ -f "$JF_NET" ]; then
@@ -568,7 +714,7 @@ echo ""
 # ============================================
 # Phase 11: Configure Jellyseerr (AFTER Jellyfin restart)
 # ============================================
-step "11/12: Configuring Jellyseerr..."
+step "12/13: Configuring Jellyseerr..."
 
 JS_URL="http://127.0.0.1:5055"
 JS_COOKIES="/tmp/jellyseerr-cookies.txt"
@@ -655,7 +801,65 @@ echo ""
 # ============================================
 # Phase 12: Final verification
 # ============================================
-step "12/12: Verifying all services..."
+step "13/14: Cleaning orphaned downloads..."
+
+# Clean downloads that have no matching torrent in qBittorrent
+QB_COOKIE_CLEAN=""
+QB_LOGIN_CLEAN=$(curl -s -c - "http://127.0.0.1:8080/api/v2/auth/login" \
+  --data-urlencode "username=admin" \
+  --data-urlencode "password=${QB_PASSWORD:-adminadmin}" 2>/dev/null) || true
+QB_COOKIE_CLEAN=$(echo "$QB_LOGIN_CLEAN" | grep SID | awk '{print $NF}') || true
+
+if [ -n "$QB_COOKIE_CLEAN" ]; then
+  # Get list of active torrent content paths
+  TORRENT_PATHS=$(curl -s -b "SID=$QB_COOKIE_CLEAN" "http://127.0.0.1:8080/api/v2/torrents/info" 2>/dev/null \
+    | python3 -c "import sys,json; [print(t.get('content_path','')) for t in json.load(sys.stdin)]" 2>/dev/null) || true
+
+  ORPHAN_COUNT=0
+  ORPHAN_SIZE=0
+
+  # Check complete/
+  for item in /downloads/complete/*; do
+    [ -e "$item" ] || continue
+    basename_item=$(basename "$item")
+    if [ -n "$TORRENT_PATHS" ] && echo "$TORRENT_PATHS" | grep -qF "$basename_item"; then
+      continue  # Has matching torrent
+    fi
+    size=$(du -sb "$item" 2>/dev/null | awk '{print $1}') || true
+    ORPHAN_SIZE=$((ORPHAN_SIZE + ${size:-0}))
+    ORPHAN_COUNT=$((ORPHAN_COUNT + 1))
+    warn "  Orphan in complete/: $basename_item ($(( ${size:-0} / 1048576 ))MB)"
+    rm -rf "$item"
+  done
+
+  # Clean incomplete/ entirely — files without torrents will never finish
+  for item in /downloads/incomplete/*; do
+    [ -e "$item" ] || continue
+    basename_item=$(basename "$item")
+    if [ -n "$TORRENT_PATHS" ] && echo "$TORRENT_PATHS" | grep -qF "$basename_item"; then
+      continue  # Active torrent
+    fi
+    size=$(du -sb "$item" 2>/dev/null | awk '{print $1}') || true
+    ORPHAN_SIZE=$((ORPHAN_SIZE + ${size:-0}))
+    ORPHAN_COUNT=$((ORPHAN_COUNT + 1))
+    rm -rf "$item"
+  done
+
+  if [ $ORPHAN_COUNT -gt 0 ]; then
+    log "  ✓ Cleaned $ORPHAN_COUNT orphans ($(( ORPHAN_SIZE / 1048576 ))MB freed)"
+  else
+    log "  ✓ No orphans found"
+  fi
+else
+  warn "  Could not login to qBittorrent, skipping cleanup"
+fi
+
+echo ""
+
+# ============================================
+# Phase 14: Final verification
+# ============================================
+step "14/14: Verifying all services..."
 
 VERIFY_OK=0
 VERIFY_FAIL=0
@@ -678,11 +882,12 @@ log "============================================"
 echo ""
 log "Configured:"
 log "  ✓ Sonarr:      download client + /tv root folder"
-log "  ✓ Radarr:      download client + /movies root folder"
-log "  ✓ Prowlarr:    Nyaa.si + RuTracker, Sonarr/Radarr sync"
-log "  ✓ qBittorrent: paths, categories, password"
+log "  ✓ Radarr:      download client + /movies, Russian language, upgrade"
+log "  ✓ Prowlarr:    Nyaa.si, RuTracker, TPB, YTS + Sonarr/Radarr sync"
+log "  ✓ qBittorrent: paths, limits (max 1), categories (tv/movies/sports)"
 log "  ✓ Bazarr:      Sonarr/Radarr connections"
-log "  ✓ Jellyfin:    admin user, Movies/TV libraries"
+log "  ✓ Jellyfin:    admin user, Movies/TV/Sports libraries"
 log "  ✓ Jellyseerr:  Jellyfin auth, Sonarr/Radarr connections"
+log "  ✓ Webhooks:    Radarr/Sonarr/Prowlarr → media-hub"
 echo ""
 log "URL Bases: /sonarr /radarr /prowlarr /bazarr /jellyfin"

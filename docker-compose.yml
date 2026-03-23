@@ -174,17 +174,6 @@ services:
       - 127.0.0.1:9999:9999
     restart: unless-stopped
 
-  deleterr:
-    image: ghcr.io/rfsbraz/deleterr:latest
-    container_name: deleterr
-    environment:
-      - TZ=${TZ}
-    volumes:
-      - ./config/deleterr:/config
-    ports:
-      - 127.0.0.1:8082:8082
-    restart: unless-stopped
-
   jellyfin:
     image: jellyfin/jellyfin:latest
     container_name: jellyfin
@@ -217,6 +206,7 @@ services:
       - ./config/prowlarr:/config/prowlarr
       - ./config/bazarr:/config/bazarr
       - ./config/jellyfin:/config/jellyfin
+      - ./downloads:/downloads
     depends_on:
       gluetun:
         condition: service_healthy
