@@ -10,6 +10,7 @@
 
 import json
 import os
+import re
 import threading
 import time
 import traceback
@@ -191,14 +192,11 @@ class State:
             pct = int(((size - left) / size) * 100) if size > 0 else 0
             ms = self.notified_progress.get(dl_id, set())
             if not self.initialized:
-                for m in [25, 50, 75]:
-                    if pct >= m: ms.add(m)
+                if pct >= 50: ms.add(50)
             else:
-                for m in [25, 50, 75]:
-                    if pct >= m and m not in ms:
-                        send_telegram(f"📊 <b>Прогресс:</b> {title}\n{pct}% ({fmt_size(size - left)}/{fmt_size(size)})")
-                        ms.add(m)
-                        break
+                if pct >= 50 and 50 not in ms:
+                    send_telegram(f"📊 <b>Прогресс:</b> {title[:50]}\n{pct}% ({fmt_size(size - left)}/{fmt_size(size)})")
+                    ms.add(50)
             self.notified_progress[dl_id] = ms
             self.queue_items[dl_id] = {"title": title, "pct": pct}
         # Detect completed downloads and trigger rescan
@@ -272,7 +270,7 @@ def classify_release(release):
     return "unknown"
 
 
-def push_to_radarr(release):
+def push_to_radarr(release, movie_id=None):
     """Push release to Radarr for proper import pipeline."""
     payload = {
         "title": release.get("title", ""),
@@ -280,6 +278,8 @@ def push_to_radarr(release):
         "protocol": "torrent",
         "publishDate": release.get("publishDate", "2026-01-01T00:00:00Z"),
     }
+    if movie_id:
+        payload["movieId"] = movie_id
     indexer = release.get("indexer", "")
     if indexer:
         payload["indexer"] = indexer
@@ -291,7 +291,7 @@ def push_to_radarr(release):
     return False
 
 
-def push_to_sonarr(release):
+def push_to_sonarr(release, series_id=None):
     """Push release to Sonarr for proper import pipeline."""
     payload = {
         "title": release.get("title", ""),
@@ -299,6 +299,8 @@ def push_to_sonarr(release):
         "protocol": "torrent",
         "publishDate": release.get("publishDate", "2026-01-01T00:00:00Z"),
     }
+    if series_id:
+        payload["seriesId"] = series_id
     indexer = release.get("indexer", "")
     if indexer:
         payload["indexer"] = indexer
@@ -321,6 +323,132 @@ def push_to_prowlarr(release):
         return True
     log(f"Prowlarr grab failed")
     return False
+
+
+def _clean_search_term(title):
+    """Extract clean search term from release title."""
+    search = title.split("[")[0].split("(")[0].strip()
+    search = re.sub(r'S\d+E?\d*', '', search, flags=re.IGNORECASE)
+    search = re.sub(r'\b(1080p|720p|480p|2160p|WEB|BD|HEVC|AVC|AAC|DUAL|DDP|H\.?\d+|WEB-DL|WEB-DLRip|BluRay|REMUX)\b', '', search, flags=re.IGNORECASE)
+    search = re.sub(r'[-._]', ' ', search).strip()
+    search = re.sub(r'\s+', ' ', search).strip()
+    return search
+
+
+def ensure_in_sonarr(release):
+    """Ensure series exists in Sonarr. Add via lookup if missing. Returns series ID or None."""
+    title = release.get("title", "")
+    tvdb_id = release.get("tvdbId", 0)
+
+    # Check existing series by tvdbId
+    existing = api_get(f"{SONARR_URL}/api/v3/series", SONARR_KEY)
+    if existing and tvdb_id:
+        for s in existing:
+            if s.get("tvdbId") == tvdb_id:
+                return s["id"]
+
+    # Lookup by title
+    search = _clean_search_term(title)
+    if not search:
+        return None
+
+    q = urllib.parse.quote(search)
+    results = api_get(f"{SONARR_URL}/api/v3/series/lookup?term={q}", SONARR_KEY, timeout=30)
+    if not results:
+        log(f"Sonarr lookup found nothing for: {search}")
+        return None
+
+    match = results[0]
+    if tvdb_id:
+        for r in results:
+            if r.get("tvdbId") == tvdb_id:
+                match = r
+                break
+
+    # Check not already added by tvdbId of the match
+    if existing:
+        for s in existing:
+            if s.get("tvdbId") == match.get("tvdbId"):
+                return s["id"]
+
+    # Add to Sonarr
+    payload = {
+        "tvdbId": match["tvdbId"],
+        "title": match.get("title", search),
+        "titleSlug": match.get("titleSlug", ""),
+        "images": match.get("images", []),
+        "seasons": match.get("seasons", []),
+        "qualityProfileId": 1,
+        "languageProfileId": 1,
+        "rootFolderPath": "/tv",
+        "monitored": True,
+        "seasonFolder": True,
+        "seriesType": match.get("seriesType", "standard"),
+        "addOptions": {"searchForMissingEpisodes": False},
+    }
+    added = api_post(f"{SONARR_URL}/api/v3/series", SONARR_KEY, payload)
+    if added and isinstance(added, dict) and added.get("id"):
+        log(f"Added to Sonarr: {match.get('title')} (tvdb:{match['tvdbId']})")
+        time.sleep(3)  # Let Sonarr index the new series before push
+        return added["id"]
+    log(f"Failed to add to Sonarr: {match.get('title')}")
+    return None
+
+
+def ensure_in_radarr(release):
+    """Ensure movie exists in Radarr. Add via lookup if missing. Returns movie ID or None."""
+    title = release.get("title", "")
+    tmdb_id = release.get("tmdbId", 0)
+
+    existing = api_get(f"{RADARR_URL}/api/v3/movie", RADARR_KEY)
+    if existing and tmdb_id:
+        for m in existing:
+            if m.get("tmdbId") == tmdb_id:
+                return m["id"]
+
+    search = _clean_search_term(title)
+    if not search:
+        return None
+
+    q = urllib.parse.quote(search)
+    results = api_get(f"{RADARR_URL}/api/v3/movie/lookup?term={q}", RADARR_KEY, timeout=30)
+    if not results:
+        log(f"Radarr lookup found nothing for: {search}")
+        return None
+
+    match = results[0]
+    if tmdb_id:
+        for r in results:
+            if r.get("tmdbId") == tmdb_id:
+                match = r
+                break
+
+    if existing:
+        for m in existing:
+            if m.get("tmdbId") == match.get("tmdbId"):
+                return m["id"]
+
+    payload = {
+        "tmdbId": match["tmdbId"],
+        "title": match.get("title", search),
+        "titleSlug": match.get("titleSlug", ""),
+        "images": match.get("images", []),
+        "qualityProfileId": 1,
+        "rootFolderPath": "/movies",
+        "monitored": True,
+        "addOptions": {"searchForMovie": False},
+    }
+    for key in ("year", "imdbId", "originalLanguage"):
+        if match.get(key):
+            payload[key] = match[key]
+
+    added = api_post(f"{RADARR_URL}/api/v3/movie", RADARR_KEY, payload)
+    if added and isinstance(added, dict) and added.get("id"):
+        log(f"Added to Radarr: {match.get('title')} (tmdb:{match['tmdbId']})")
+        time.sleep(3)
+        return added["id"]
+    log(f"Failed to add to Radarr: {match.get('title')}")
+    return None
 
 
 # ── Telegram Bot Commands ────────────────────────────────────────────────
@@ -453,13 +581,17 @@ def do_grab_silent(release):
     title = release.get("title", "?")[:60]
 
     if rtype == "movie":
-        if not push_to_radarr(release):
-            log(f"Radarr push failed, falling back to Prowlarr")
-            push_to_prowlarr(release)
+        mid = ensure_in_radarr(release)
+        if mid and push_to_radarr(release, movie_id=mid):
+            return
+        log(f"Radarr route failed for {title}, falling back to Prowlarr")
+        push_to_prowlarr(release)
     elif rtype == "series":
-        if not push_to_sonarr(release):
-            log(f"Sonarr push failed, falling back to Prowlarr")
-            push_to_prowlarr(release)
+        sid = ensure_in_sonarr(release)
+        if sid and push_to_sonarr(release, series_id=sid):
+            return
+        log(f"Sonarr route failed for {title}, falling back to Prowlarr")
+        push_to_prowlarr(release)
     else:
         # Sport or unknown — use Prowlarr directly
         push_to_prowlarr(release)
@@ -481,75 +613,152 @@ def trigger_rescan():
 
 def show_status():
     lines = ["📊 <b>Статус</b>\n"]
-    has_any = False
-    if state.queue_items:
-        has_any = True
-        for dl_id, info in state.queue_items.items():
-            lines.append(f"⬇️ {info['title'][:50]}\n   {info['pct']}%\n")
-    # Also check qBittorrent directly for seeding/moving
+
+    # qBittorrent — single source of truth
+    torrents = []
     try:
         qb_url = "http://qbittorrent:8080/api/v2"
-        # Login
         login_data = urllib.parse.urlencode({"username": "admin", "password": os.environ.get("QB_PASSWORD", "")}).encode()
         req = urllib.request.Request(f"{qb_url}/auth/login", data=login_data)
         req.add_header("Referer", qb_url)
         with urllib.request.urlopen(req, timeout=5) as resp:
             cookie = resp.headers.get("Set-Cookie", "")
-        # Get torrents
         req2 = urllib.request.Request(f"{qb_url}/torrents/info")
         req2.add_header("Cookie", cookie)
         with urllib.request.urlopen(req2, timeout=5) as resp2:
             torrents = json.loads(resp2.read())
-        for t in torrents:
-            has_any = True
-            pct = int(t.get("progress", 0) * 100)
-            st = t.get("state", "")
-            name = t.get("name", "?")[:50]
-            speed = t.get("dlspeed", 0) / (1024 * 1024)
-            if st in ("downloading", "forcedDL", "stalledDL"):
-                lines.append(f"⬇️ {name}\n   {pct}% • {speed:.1f} MB/s\n")
-            elif st == "moving":
-                lines.append(f"📦 {name}\n   Перемещение на хранилище\n")
-            elif st in ("uploading", "forcedUP", "stalledUP"):
-                lines.append(f"🌱 {name}\n   Раздача ({fmt_size(t.get('uploaded',0))} отдано)\n")
     except Exception as e:
         log(f"QB status error: {e}")
-    if not has_any:
-        lines.append("Нет активных скачиваний")
+        lines.append("qBittorrent недоступен")
+        send_telegram("\n".join(lines))
+        return
+
+    if not torrents:
+        lines.append("Нет активных торрентов")
+        send_telegram("\n".join(lines))
+        return
+
+    downloading, moving, seeding, other = [], [], [], []
+
+    for t in torrents:
+        name = t.get("name", "?")[:50]
+        pct = int(t.get("progress", 0) * 100)
+        st = t.get("state", "")
+        speed_dl = t.get("dlspeed", 0) / (1024 * 1024)
+        size = fmt_size(t.get("total_size", 0))
+        uploaded = fmt_size(t.get("uploaded", 0))
+        ratio = t.get("ratio", 0)
+
+        if st in ("downloading", "forcedDL", "stalledDL", "metaDL", "allocating"):
+            downloading.append(f"  ⬇️ {name}\n     {pct}% • {speed_dl:.1f} MB/s • {size}")
+        elif st == "moving":
+            moving.append(f"  📦 {name}\n     Перемещение...")
+        elif st in ("uploading", "forcedUP", "stalledUP", "queuedUP"):
+            seeding.append(f"  🌱 {name}\n     {uploaded} отдано • {ratio:.1f}x")
+        elif st in ("checkingDL", "checkingUP", "checkingResumeData"):
+            other.append(f"  🔍 {name}\n     Проверка...")
+        elif st in ("pausedDL", "pausedUP"):
+            other.append(f"  ⏸ {name}\n     Пауза ({pct}%)")
+        elif st == "queuedDL":
+            other.append(f"  🕐 {name}\n     В очереди")
+
+    if downloading:
+        lines.append(f"<b>⬇️ Загрузка ({len(downloading)}):</b>")
+        lines.extend(downloading)
+    if moving:
+        lines.append(f"\n<b>📦 Перемещение ({len(moving)}):</b>")
+        lines.extend(moving)
+    if seeding:
+        lines.append(f"\n<b>🌱 Раздача ({len(seeding)}):</b>")
+        lines.extend(seeding)
+    if other:
+        lines.append(f"\n<b>⏳ Прочее ({len(other)}):</b>")
+        lines.extend(other)
+
+    total_size = sum(t.get("total_size", 0) for t in torrents)
+    total_uploaded = sum(t.get("uploaded", 0) for t in torrents)
+    lines.append(f"\n💾 Торренты: {fmt_size(total_size)} • Отдано: {fmt_size(total_uploaded)}")
+
     send_telegram("\n".join(lines))
 
 
 def show_list():
     lines = ["📋 <b>Мониторинг</b>\n"]
+
+    # Fresh data from APIs
+    movies = api_get(f"{RADARR_URL}/api/v3/movie", RADARR_KEY) or []
+    series = api_get(f"{SONARR_URL}/api/v3/series", SONARR_KEY) or []
+
+    done_movies, waiting_movies, searching_movies = [], [], []
+    done_series, active_series = [], []
+
+    for m in movies:
+        if not m.get("monitored"):
+            continue
+        title = m.get("title", "?")
+        year = m.get("year", "")
+        label = f"{title} ({year})" if year else title
+        if m.get("hasFile"):
+            done_movies.append(label)
+        elif m.get("status") in ("announced", "inCinemas"):
+            st = "анонсирован" if m["status"] == "announced" else "в кинотеатрах"
+            waiting_movies.append(f"{label} — {st}")
+        elif m.get("status") == "released":
+            searching_movies.append(label)
+
+    for s in series:
+        if not s.get("monitored"):
+            continue
+        title = s.get("title", "?")
+        # Count only monitored seasons (skip Season 0 specials)
+        monitored_total = 0
+        monitored_files = 0
+        for season in s.get("seasons", []):
+            if season.get("monitored") and season.get("seasonNumber", 0) > 0:
+                ss = season.get("statistics", {})
+                monitored_total += ss.get("totalEpisodeCount", 0)
+                monitored_files += ss.get("episodeFileCount", 0)
+
+        if monitored_total == 0:
+            continue
+
+        if monitored_files >= monitored_total and s.get("status") == "continuing":
+            active_series.append(f"{title} ({monitored_files}/{monitored_total} серий) — ждём новых")
+        elif monitored_files >= monitored_total:
+            done_series.append(f"{title} ({monitored_files} серий)")
+        else:
+            active_series.append(f"{title} ({monitored_files}/{monitored_total} серий)")
+
     has_any = False
 
-    # Movies waiting for release
-    waiting = [m for m in state.movies.values() if m["status"] in ("announced", "inCinemas") and not m["hasFile"]]
-    if waiting:
+    if waiting_movies:
         has_any = True
         lines.append("<b>⏳ Ожидаем выхода:</b>")
-        for m in waiting:
-            label = "анонсирован" if m["status"] == "announced" else "в кинотеатрах"
-            lines.append(f"  • {m['title']} ({label})")
+        for m in waiting_movies:
+            lines.append(f"  • {m}")
 
-    # Movies released but not downloaded
-    searching = [m for m in state.movies.values() if m["status"] == "released" and not m["hasFile"]]
-    if searching:
+    if searching_movies:
         has_any = True
         lines.append("\n<b>🔍 Ищем релизы:</b>")
-        for m in searching:
-            lines.append(f"  • {m['title']}")
+        for m in searching_movies:
+            lines.append(f"  • {m}")
 
-    # Continuing series (waiting for new episodes)
-    continuing = [s for s in state.series.values() if s["status"] == "continuing"]
-    if continuing:
+    if active_series:
         has_any = True
-        lines.append("\n<b>📺 Ждём новых серий:</b>")
-        for s in continuing:
-            lines.append(f"  • {s['title']} ({s['files']}/{s['total']} серий)")
+        lines.append("\n<b>📺 Сериалы:</b>")
+        for s in active_series:
+            lines.append(f"  • {s}")
+
+    if done_movies or done_series:
+        has_any = True
+        lines.append("\n<b>✅ Скачано:</b>")
+        for m in done_movies:
+            lines.append(f"  🎬 {m}")
+        for s in done_series:
+            lines.append(f"  📺 {s}")
 
     if not has_any:
-        lines.append("Всё скачано, нечего ждать 🎉")
+        lines.append("Пусто — добавьте что-нибудь через Поиск")
 
     send_telegram("\n".join(lines))
 
@@ -657,9 +866,10 @@ def handle_jellyfin_webhook(data):
 
 
 def handle_prowlarr_webhook(data):
+    # Prowlarr grabs already notified via Sonarr/Radarr webhooks — log only
     if data.get("eventType") == "Grab":
         rel = data.get("release", {})
-        send_telegram(f"⬇️ <b>Качаем:</b> {rel.get('releaseTitle','?')}\n{fmt_size(rel.get('size',0))} • {rel.get('indexer','?')}")
+        log(f"Prowlarr grab (silent): {rel.get('releaseTitle','?')[:50]}")
 
 
 def handle_jellyseerr_webhook(data):
