@@ -597,17 +597,30 @@ def do_grab_silent(release):
         push_to_prowlarr(release)
 
 
+def _jellyfin_token():
+    """Authenticate with Jellyfin and return a valid token."""
+    jf_user = os.environ.get("JELLYFIN_USER", "admin")
+    jf_pass = os.environ.get("JELLYFIN_PASSWORD", "")
+    data = json.dumps({"Username": jf_user, "Pw": jf_pass}).encode()
+    req = urllib.request.Request(f"{JELLYFIN_URL}/Users/AuthenticateByName",
+        data=data,
+        headers={"Content-Type": "application/json",
+                 "X-Emby-Authorization": 'MediaBrowser Client="media-hub", Device="hub", DeviceId="hub1", Version="1.0.0"'})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read()).get("AccessToken")
+
+
 def trigger_rescan():
     """Tell Sonarr/Radarr to rescan downloads and Jellyfin to refresh library."""
     api_post(f"{SONARR_URL}/api/v3/command", SONARR_KEY, {"name": "DownloadedEpisodesScan"})
     api_post(f"{RADARR_URL}/api/v3/command", RADARR_KEY, {"name": "DownloadedMoviesScan"})
     try:
-        jf_token = os.environ.get("JELLYFIN_TOKEN", "b21df330768e467a9120d6c60dfe43be")
+        token = _jellyfin_token()
         req = urllib.request.Request(f"{JELLYFIN_URL}/Library/Refresh", method="POST",
-            headers={"Authorization": f'MediaBrowser Token="{jf_token}"'})
+            headers={"Authorization": f'MediaBrowser Token="{token}"'})
         urllib.request.urlopen(req, timeout=10)
-    except Exception:
-        pass
+    except Exception as e:
+        log(f"Jellyfin refresh failed: {e}")
     log("Rescan triggered: Sonarr + Radarr + Jellyfin")
 
 
