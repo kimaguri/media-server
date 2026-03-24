@@ -258,14 +258,23 @@ def send_search_results(query, results, callback_prefix):
 
 
 def classify_release(release):
-    """Determine if release is movie, series, or sport based on categories."""
+    """Determine if release is movie, series, or sport based on categories and title."""
     cats = release.get("categories", [])
+    cat_ids = [c.get("id", 0) for c in cats]
     cat_names = " ".join(c.get("name", "") for c in cats)
+    title = release.get("title", "")
+
+    # Anime categories (5070=TV/Anime, 127720=Anime) → always series
+    if any(cid in (5070, 127720) for cid in cat_ids):
+        return "series"
+    # Title has season/episode pattern → series (even if tagged as Sport)
+    if re.search(r'S\d+E?\d*|Season\s*\d+', title, re.IGNORECASE):
+        return "series"
     if "Movie" in cat_names:
         return "movie"
-    elif "TV" in cat_names:
+    if "TV" in cat_names:
         return "series"
-    elif "Sport" in cat_names:
+    if "Sport" in cat_names:
         return "sport"
     return "unknown"
 
@@ -620,6 +629,28 @@ def do_search(query, search_type):
     send_search_results(query, results, prefix)
 
 
+def _fix_prowlarr_torrent_category(release, expected_cat):
+    """After Prowlarr grabs a torrent, fix its qBit category (Prowlarr hardcodes 'sports')."""
+    time.sleep(10)  # Wait for torrent to appear in qBit
+    try:
+        torrents, cookie = _qb_session()
+        if not torrents or not cookie:
+            return
+        title_lower = release.get("title", "").lower()[:30]
+        for t in torrents:
+            if title_lower and title_lower in t.get("name", "").lower():
+                if t.get("category") != expected_cat:
+                    qb_url = "http://qbittorrent:8080/api/v2"
+                    data = urllib.parse.urlencode({"hashes": t["hash"], "category": expected_cat}).encode()
+                    req = urllib.request.Request(f"{qb_url}/torrents/setCategory", data=data)
+                    req.add_header("Cookie", cookie)
+                    urllib.request.urlopen(req, timeout=5)
+                    log(f"Fixed qBit category: {t['name'][:40]} → {expected_cat}")
+                return
+    except Exception as e:
+        log(f"Fix category error: {e}")
+
+
 def do_grab_silent(release):
     """Route release through Sonarr/Radarr for proper import, or Prowlarr for sports."""
     rtype = classify_release(release)
@@ -631,14 +662,16 @@ def do_grab_silent(release):
             return
         log(f"Radarr route failed for {title}, falling back to Prowlarr")
         push_to_prowlarr(release)
+        threading.Thread(target=_fix_prowlarr_torrent_category, args=(release, "movies"), daemon=True).start()
     elif rtype == "series":
         sid = ensure_in_sonarr(release)
         if sid and push_to_sonarr(release, series_id=sid):
             return
         log(f"Sonarr route failed for {title}, falling back to Prowlarr")
         push_to_prowlarr(release)
+        threading.Thread(target=_fix_prowlarr_torrent_category, args=(release, "tv"), daemon=True).start()
     else:
-        # Sport or unknown — use Prowlarr directly
+        # Sport — use Prowlarr directly (category stays "sports")
         push_to_prowlarr(release)
 
 
@@ -1101,11 +1134,52 @@ class HubHandler(BaseHTTPRequestHandler):
 
 # ── Auto-search ──────────────────────────────────────────────────────────
 
+def _get_release_group(series_id):
+    """Get the most common release group for a series from existing episode files."""
+    files = api_get(f"{SONARR_URL}/api/v3/episodefile?seriesId={series_id}", SONARR_KEY)
+    if not files:
+        return None
+    groups = {}
+    for f in files:
+        rg = f.get("releaseGroup", "")
+        if rg:
+            groups[rg] = groups.get(rg, 0) + 1
+    if not groups:
+        return None
+    # Return the most frequent release group
+    return max(groups, key=groups.get)
+
+
+def _ensure_release_profile(group, series_id):
+    """Ensure a Sonarr release profile exists that prefers this release group for this series."""
+    if not group:
+        return
+    profiles = api_get(f"{SONARR_URL}/api/v3/releaseprofile", SONARR_KEY) or []
+    # Check if profile already exists for this group
+    for p in profiles:
+        preferred = p.get("preferred", [])
+        for pref in preferred:
+            if pref.get("key", "").lower() == group.lower():
+                return  # Already exists
+    # Create release profile with preferred word for this group
+    payload = {
+        "enabled": True,
+        "required": [],
+        "ignored": [],
+        "preferred": [{"key": group, "value": 100}],
+        "includePreferredWhenRenaming": False,
+        "indexerId": 0,
+        "tags": [],
+    }
+    result = api_post(f"{SONARR_URL}/api/v3/releaseprofile", SONARR_KEY, payload)
+    if result and isinstance(result, dict):
+        log(f"Created release profile: prefer [{group}] +100")
+
+
 def auto_search():
     series = api_get(f"{SONARR_URL}/api/v3/series", SONARR_KEY)
     if not series: return
     # Only search continuing series that already have some files downloaded
-    # (skip freshly added series with 0 files to avoid mass downloading)
     continuing = [s for s in series
                   if s.get("status") == "continuing"
                   and s.get("monitored")
@@ -1113,8 +1187,14 @@ def auto_search():
     if not continuing: return
     log(f"Auto-search: {len(continuing)} continuing series")
     for s in continuing:
+        # Set preferred release group based on existing files
+        rg = _get_release_group(s["id"])
+        if rg:
+            _ensure_release_profile(rg, s["id"])
+            log(f"Auto-search: {s.get('title', '?')} (prefer: {rg})")
+        else:
+            log(f"Auto-search: {s.get('title', '?')}")
         api_post(f"{SONARR_URL}/api/v3/command", SONARR_KEY, {"name": "SeriesSearch", "seriesId": s["id"]})
-        log(f"Auto-search: {s.get('title', '?')}")
         time.sleep(5)
 
 
