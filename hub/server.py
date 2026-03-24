@@ -743,6 +743,21 @@ def _save_teams(teams):
         log(f"Save teams error: {e}")
 
 
+def _fmt_match_date(iso_date):
+    """Format ESPN ISO date (UTC) to local time: '4 апр, 00:00'."""
+    if not iso_date:
+        return "?"
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(iso_date.replace("Z", "+00:00"))
+        # Convert to local time (uses TZ env var)
+        local = dt.astimezone()
+        months = ["", "янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
+        return f"{local.day} {months[local.month]}, {local.strftime('%H:%M')}"
+    except Exception:
+        return iso_date[:16].replace("T", " ")
+
+
 def _espn_get(path):
     """Call ESPN public API."""
     try:
@@ -829,7 +844,7 @@ def _add_team(team_name, message_id):
     if events:
         lines.append("<b>Ближайшие матчи:</b>")
         for e in events[:5]:
-            date = e.get("date", "?")[:16].replace("T", " ")
+            date = _fmt_match_date(e.get("date", ""))
             lines.append(f"  📅 {date} • {e.get('name', '?')}")
             if e.get("league"):
                 lines.append(f"     🏆 {e['league']}")
@@ -1146,7 +1161,7 @@ def show_matches():
         lines.append(f"<b>📌 {tname}</b>")
         if events:
             for e in events[:5]:
-                date = e.get("date", "?")[:16].replace("T", " ")
+                date = _fmt_match_date(e.get("date", ""))
                 event_name = e.get("name", "?")
                 league = e.get("league", "")
                 lines.append(f"  📅 {date} • {event_name}")
