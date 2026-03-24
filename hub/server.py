@@ -233,8 +233,8 @@ def send_search_results(query, results, callback_prefix):
     if not results:
         send_telegram(f"❌ <b>Не найдено:</b> {query}")
         return
-    # Limit to 8, filter only with seeders
-    filtered = [r for r in results if (r.get("seeders") or 0) > 0][:8]
+    # Filter only with seeders, limit to 15
+    filtered = [r for r in results if (r.get("seeders") or 0) > 0][:15]
     if not filtered:
         filtered = results[:5]
 
@@ -792,8 +792,7 @@ def handle_radarr_webhook(data):
         else:
             send_telegram(f"✅ <b>Фильм готов:</b> {title}\nДоступно в Jellyfin")
     elif event == "MovieAdded":
-        send_telegram(f"🎬 <b>Добавлен фильм:</b> {title}\nИщем релизы...")
-        threading.Thread(target=do_search, args=(title, "movie"), daemon=True).start()
+        log(f"Movie added: {title} (no auto-search — user already selected torrent)")
     elif event == "MovieDelete":
         send_telegram(f"🗑 <b>Удалён:</b> {title}")
     elif event == "Health":
@@ -841,8 +840,7 @@ def handle_sonarr_webhook(data):
             timer.start()
             state.pending_episodes[title]["timer"] = timer
     elif event == "SeriesAdd":
-        send_telegram(f"📺 <b>Добавлен сериал:</b> {title}\nИщем релизы...")
-        threading.Thread(target=do_search, args=(title, "series"), daemon=True).start()
+        log(f"Series added: {title} (no auto-search — user already selected torrent)")
     elif event == "SeriesDelete":
         send_telegram(f"🗑 <b>Удалён:</b> {title}")
 
