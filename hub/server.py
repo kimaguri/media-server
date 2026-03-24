@@ -503,7 +503,7 @@ def handle_bot_message(msg):
 
     # Commands
     if text in ("/start", "/help"):
-        send_telegram("🎬 <b>Media Hub Bot</b>\n\nИспользуй кнопки внизу или просто напиши название для поиска.")
+        send_telegram("🎬 <b>Media Hub Bot</b>\n\nИспользуй кнопки внизу для управления.\n🔍 Поиск — найти и скачать\n📊 Статус — что качается\n📋 Список — что мониторится")
         return
 
     if text in ("🔍 Поиск", "/search"):
@@ -535,8 +535,12 @@ def handle_bot_message(msg):
         threading.Thread(target=do_search, args=(text, search_type), daemon=True).start()
         return
 
-    # Default: search everything
-    threading.Thread(target=do_search, args=(text, "all"), daemon=True).start()
+    # No free-text search — always require category selection
+    send_telegram("Сначала выбери категорию:", {"inline_keyboard": [
+        [{"text": "🎬 Фильм", "callback_data": "type:movie"},
+         {"text": "📺 Сериал", "callback_data": "type:series"},
+         {"text": "⚽ Матч", "callback_data": "type:sport"}],
+    ]})
 
 
 def handle_callback(callback):
