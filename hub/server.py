@@ -551,7 +551,14 @@ def handle_callback(callback):
         state.user_state[chat_id] = {"waiting_query": search_type}
         return
 
-    # Cancel download
+    # Cancel all downloads
+    if data == "cancel_all_dl":
+        answer_callback(cb_id, "Останавливаю все загрузки...")
+        edit_message(msg.get("message_id"), "🛑 Останавливаю все загрузки...")
+        threading.Thread(target=do_cancel_all_downloads, daemon=True).start()
+        return
+
+    # Cancel single download
     if data.startswith("cancel_dl:"):
         hash_prefix = data.split(":", 1)[1]
         answer_callback(cb_id, "Останавливаю...")
@@ -740,7 +747,12 @@ def show_status():
     total_uploaded = sum(t.get("uploaded", 0) for t in torrents)
     lines.append(f"\n💾 Торренты: {fmt_size(total_size)} • Отдано: {fmt_size(total_uploaded)}")
 
-    markup = {"inline_keyboard": cancel_buttons} if cancel_buttons else None
+    if cancel_buttons:
+        if len(cancel_buttons) > 1:
+            cancel_buttons.append([{"text": "🛑 Остановить все загрузки", "callback_data": "cancel_all_dl"}])
+        markup = {"inline_keyboard": cancel_buttons}
+    else:
+        markup = None
     send_telegram("\n".join(lines), reply_markup=markup)
 
 
@@ -790,6 +802,53 @@ def do_cancel_download(hash_prefix):
             log(f"Removed from Radarr queue: {item.get('title','?')[:50]}")
 
     send_telegram(f"🛑 <b>Остановлено:</b> {name[:50]}\nТоррент и файлы удалены")
+
+
+def do_cancel_all_downloads():
+    """Cancel ALL active downloads (not seeding). Delete torrents + files, clean queues."""
+    torrents, cookie = _qb_session()
+    if not torrents or not cookie:
+        send_telegram("❌ qBittorrent недоступен")
+        return
+
+    dl_states = ("downloading", "forcedDL", "stalledDL", "metaDL", "allocating", "pausedDL", "queuedDL")
+    active = [t for t in torrents if t.get("state", "") in dl_states]
+
+    if not active:
+        send_telegram("Нет активных загрузок для остановки")
+        return
+
+    hashes = [t["hash"] for t in active]
+    names = [t.get("name", "?")[:40] for t in active]
+
+    # Delete all from qBittorrent
+    try:
+        qb_url = "http://qbittorrent:8080/api/v2"
+        data = urllib.parse.urlencode({"hashes": "|".join(hashes), "deleteFiles": "true"}).encode()
+        req = urllib.request.Request(f"{qb_url}/torrents/delete", data=data)
+        req.add_header("Cookie", cookie)
+        urllib.request.urlopen(req, timeout=10)
+        log(f"Cancelled all downloads: {len(hashes)} torrents")
+    except Exception as e:
+        log(f"Cancel all error: {e}")
+
+    # Clean Sonarr/Radarr queues
+    hash_set = {h.lower() for h in hashes}
+    sq = api_get(f"{SONARR_URL}/api/v3/queue/details", SONARR_KEY) or []
+    for item in sq:
+        if item.get("downloadId", "").lower() in hash_set:
+            api_delete(f"{SONARR_URL}/api/v3/queue/{item['id']}?removeFromClient=false&blocklist=false", SONARR_KEY)
+
+    rq = api_get(f"{RADARR_URL}/api/v3/queue/details", RADARR_KEY) or []
+    for item in rq:
+        if item.get("downloadId", "").lower() in hash_set:
+            api_delete(f"{RADARR_URL}/api/v3/queue/{item['id']}?removeFromClient=false&blocklist=false", RADARR_KEY)
+
+    lines = [f"🛑 <b>Остановлено {len(hashes)} загрузок:</b>\n"]
+    for n in names:
+        lines.append(f"  • {n}")
+    lines.append("\nТорренты и файлы удалены. Раздачи не тронуты.")
+    send_telegram("\n".join(lines))
 
 
 def show_list():
