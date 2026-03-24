@@ -28,12 +28,12 @@ PROWLARR_URL = os.environ.get("PROWLARR_URL", "http://gluetun:9696/prowlarr")
 PROWLARR_KEY = os.environ.get("PROWLARR_KEY", "")
 JELLYSEERR_URL = os.environ.get("JELLYSEERR_URL", "http://jellyseerr:5055")
 JELLYFIN_URL = os.environ.get("JELLYFIN_URL", "http://jellyfin:8096/jellyfin")
-SPORTARR_URL = os.environ.get("SPORTARR_URL", "http://sportarr:1867")
-SPORTARR_KEY = os.environ.get("SPORTARR_KEY", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 PORT = int(os.environ.get("PORT", "9999"))
 AUTO_SEARCH_HOURS = int(os.environ.get("AUTO_SEARCH_HOURS", "6"))
+TEAMS_FILE = os.environ.get("TEAMS_FILE", "/data/teams.json")
+SPORTSDB_API = "https://www.thesportsdb.com/api/v1/json/3"
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -534,12 +534,16 @@ def handle_bot_message(msg):
         threading.Thread(target=show_matches, daemon=True).start()
         return
 
-    # If user is in search mode, treat text as search query
+    # If user is in search mode, treat text as search query or team add
     user = state.user_state.get(chat_id, {})
     search_type = user.get("waiting_query")
     if search_type:
         state.user_state.pop(chat_id, None)
-        threading.Thread(target=do_search, args=(text, search_type), daemon=True).start()
+        if search_type == "add_team":
+            send_telegram(f"🔍 Ищу команду: {text}...")
+            threading.Thread(target=_add_team_via_search, args=(text,), daemon=True).start()
+        else:
+            threading.Thread(target=do_search, args=(text, search_type), daemon=True).start()
         return
 
     # No free-text search — always require category selection
@@ -584,17 +588,27 @@ def handle_callback(callback):
         threading.Thread(target=show_matches, daemon=True).start()
         return
 
-    # Track team from sport download
+    # Track/remove team
     if data.startswith("track_team:"):
         parts = data.split(":", 2)
         if len(parts) >= 3:
-            league_id, team_name = parts[1], parts[2]
-            if team_name == "skip":
+            action, value = parts[1], parts[2]
+            if action == "skip":
                 answer_callback(cb_id)
                 edit_message(msg.get("message_id"), "👌")
-            else:
-                answer_callback(cb_id, f"Ищу {team_name} в Sportarr...")
-                threading.Thread(target=_add_team_to_sportarr, args=(team_name, msg.get("message_id")), daemon=True).start()
+            elif action == "add":
+                answer_callback(cb_id, f"Ищу {value}...")
+                threading.Thread(target=_add_team, args=(value, msg.get("message_id")), daemon=True).start()
+            elif action == "remove":
+                answer_callback(cb_id, "Удалено")
+                threading.Thread(target=_remove_team, args=(value, msg.get("message_id")), daemon=True).start()
+        return
+
+    # Add team prompt
+    if data == "matches:add_team":
+        answer_callback(cb_id)
+        send_telegram("Введите название команды:", {"keyboard": [["❌ Отмена"]], "resize_keyboard": True})
+        state.user_state[chat_id] = {"waiting_query": "add_team"}
         return
 
     # Cancel single download
@@ -707,60 +721,163 @@ def do_grab_silent(release):
         _offer_team_tracking(release)
 
 
-def _add_team_to_sportarr(team_name, message_id):
-    """Search Sportarr leagues for a team and show which leagues to track."""
-    leagues = api_get(f"{SPORTARR_URL}/api/leagues", SPORTARR_KEY) or []
-    found_in = []
+# ── Teams tracking (TheSportsDB) ─────────────────────────────────────────
 
-    for league in leagues:
-        lid = league.get("id")
-        teams = api_get(f"{SPORTARR_URL}/api/leagues/{lid}/teams", SPORTARR_KEY) or []
-        for t in teams:
-            tname = t.get("strTeam", t.get("name", ""))
-            if team_name.lower() in tname.lower():
-                found_in.append({"league": league.get("name", "?"), "league_id": lid, "team": tname, "team_id": t.get("idTeam", "")})
+def _load_teams():
+    """Load tracked teams from JSON file."""
+    try:
+        with open(TEAMS_FILE, "r") as f:
+            return json.loads(f.read())
+    except Exception:
+        return []
 
-    if not found_in:
-        edit_message(message_id, f"❌ {team_name} не найден в добавленных лигах")
+
+def _save_teams(teams):
+    """Save tracked teams to JSON file."""
+    try:
+        os.makedirs(os.path.dirname(TEAMS_FILE), exist_ok=True)
+        with open(TEAMS_FILE, "w") as f:
+            f.write(json.dumps(teams, ensure_ascii=False, indent=2))
+    except Exception as e:
+        log(f"Save teams error: {e}")
+
+
+def _sportsdb_get(endpoint):
+    """Call TheSportsDB free API."""
+    try:
+        url = f"{SPORTSDB_API}/{endpoint}"
+        req = urllib.request.Request(url, headers={"User-Agent": "media-hub/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        log(f"TheSportsDB error: {endpoint}: {e}")
+        return None
+
+
+def _search_team(name):
+    """Search for a team by name. Returns list of matches."""
+    data = _sportsdb_get(f"searchteams.php?t={urllib.parse.quote(name)}")
+    if not data or not data.get("teams"):
+        return []
+    return data["teams"]
+
+
+def _get_team_next_events(team_id):
+    """Get upcoming events for a team (all tournaments)."""
+    data = _sportsdb_get(f"eventsnext.php?id={team_id}")
+    if not data or not data.get("events"):
+        return []
+    return data["events"]
+
+
+def _add_team(team_name, message_id):
+    """Search TheSportsDB for team, add to tracked list."""
+    results = _search_team(team_name)
+    if not results:
+        edit_message(message_id, f"❌ Команда \"{team_name}\" не найдена")
         return
 
-    lines = [f"⚽ <b>{team_name}</b> найден в {len(found_in)} лигах:\n"]
-    for f in found_in:
-        lines.append(f"  🏆 {f['league']}")
+    team = results[0]
+    tid = team.get("idTeam", "")
+    tname = team.get("strTeam", team_name)
+    sport = team.get("strSport", "?")
+    league = team.get("strLeague", "?")
 
-    edit_message(message_id, "\n".join(lines) + "\n\n✅ Команда будет отслеживаться")
-    log(f"Team tracking: {team_name} found in {len(found_in)} leagues")
+    teams = _load_teams()
+    # Check not already tracked
+    if any(t.get("id") == tid for t in teams):
+        edit_message(message_id, f"✅ {tname} уже отслеживается")
+        return
+
+    teams.append({"id": tid, "name": tname, "sport": sport, "league": league})
+    _save_teams(teams)
+
+    # Get upcoming matches
+    events = _get_team_next_events(tid)
+    lines = [f"✅ <b>{tname}</b> добавлен для отслеживания\n🏆 {league} • {sport}\n"]
+    if events:
+        lines.append(f"<b>Ближайшие матчи:</b>")
+        for e in events[:5]:
+            date = (e.get("dateEvent") or "?")
+            lines.append(f"  📅 {date} • {e.get('strEvent', '?')}")
+            lines.append(f"     🏆 {e.get('strLeague', '')}")
+    else:
+        lines.append("Нет предстоящих матчей")
+
+    edit_message(message_id, "\n".join(lines))
+    log(f"Team tracked: {tname} (id:{tid})")
+
+
+def _remove_team(team_id, message_id):
+    """Remove team from tracked list."""
+    teams = _load_teams()
+    removed = [t for t in teams if t.get("id") == team_id]
+    teams = [t for t in teams if t.get("id") != team_id]
+    _save_teams(teams)
+    name = removed[0]["name"] if removed else "?"
+    edit_message(message_id, f"🗑 {name} удалён из отслеживания")
+    log(f"Team untracked: {name}")
+
+
+def _add_team_via_search(query):
+    """Search TheSportsDB and offer team selection."""
+    results = _search_team(query)
+    if not results:
+        send_telegram(f"❌ Ничего не найдено по запросу \"{query}\"")
+        return
+
+    teams = _load_teams()
+    tracked_ids = {t.get("id") for t in teams}
+
+    lines = [f"⚽ <b>Результаты: {query}</b>\n"]
+    buttons = []
+    for t in results[:8]:
+        tid = t.get("idTeam", "")
+        name = t.get("strTeam", "?")
+        sport = t.get("strSport", "?")
+        league = t.get("strLeague", "?")
+        country = t.get("strCountry", "")
+        already = " ✅" if tid in tracked_ids else ""
+        lines.append(f"  • {name} ({sport}, {league}){already}")
+        if tid not in tracked_ids:
+            buttons.append([{"text": f"📌 {name} — {sport}", "callback_data": f"track_team:add:{name}"}])
+
+    if not buttons:
+        lines.append("\nВсе команды уже отслеживаются!")
+    send_telegram("\n".join(lines), reply_markup={"inline_keyboard": buttons} if buttons else None)
 
 
 def _offer_team_tracking(release):
     """After downloading a sport match, offer to track teams involved."""
     title = release.get("title", "")
-    if not SPORTARR_KEY:
-        return
-    # Try to extract team names from the title
-    # Common patterns: "Team1 vs Team2", "Team1 - Team2"
+    # Extract team names: "Team1 vs Team2", "Team1 - Team2"
     m = re.search(r'(.+?)\s+(?:vs?\.?|[-–])\s+(.+?)(?:\s+\d{4}|\s+\(|\s+S\d|$)', title, re.IGNORECASE)
     if not m:
         return
     team1 = m.group(1).strip()[:30]
     team2 = m.group(2).strip()[:30]
-    # Clean up common prefixes
     for prefix in ("[", "{"):
         if prefix in team1:
             team1 = team1.split("]")[-1].split("}")[-1].strip()
 
-    buttons = []
-    if team1:
-        buttons.append([{"text": f"📌 Следить: {team1}", "callback_data": f"track_team:0:{team1}"}])
-    if team2:
-        buttons.append([{"text": f"📌 Следить: {team2}", "callback_data": f"track_team:0:{team2}"}])
-    buttons.append([{"text": "Нет, спасибо", "callback_data": "track_team:skip:skip"}])
+    # Check if already tracked
+    teams = _load_teams()
+    tracked_names = {t.get("name", "").lower() for t in teams}
 
-    if buttons:
-        send_telegram(
-            f"⚽ Хочешь отслеживать матчи этих команд?\nБот будет уведомлять о предстоящих играх.",
-            reply_markup={"inline_keyboard": buttons}
-        )
+    buttons = []
+    if team1 and team1.lower() not in tracked_names:
+        buttons.append([{"text": f"📌 Следить: {team1}", "callback_data": f"track_team:add:{team1}"}])
+    if team2 and team2.lower() not in tracked_names:
+        buttons.append([{"text": f"📌 Следить: {team2}", "callback_data": f"track_team:add:{team2}"}])
+
+    if not buttons:
+        return  # Both already tracked
+
+    buttons.append([{"text": "Нет, спасибо", "callback_data": "track_team:skip:skip"}])
+    send_telegram(
+        f"⚽ Отслеживать матчи этих команд?\nБот будет присылать расписание.",
+        reply_markup={"inline_keyboard": buttons}
+    )
 
 
 def _jellyfin_token():
@@ -973,43 +1090,54 @@ def do_cancel_all_downloads():
 
 
 def show_matches():
-    """Show upcoming matches from Sportarr."""
-    if not SPORTARR_KEY:
-        send_telegram("⚽ Sportarr не настроен")
-        return
-
-    # Get events from Sportarr
-    from datetime import datetime, timedelta
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    future = (datetime.utcnow() + timedelta(days=14)).strftime("%Y-%m-%d")
-
-    events = api_get(f"{SPORTARR_URL}/api/events?start={today}&end={future}", SPORTARR_KEY) or []
-    leagues = api_get(f"{SPORTARR_URL}/api/leagues", SPORTARR_KEY) or []
-
+    """Show upcoming matches for tracked teams via TheSportsDB."""
+    teams = _load_teams()
     lines = ["⚽ <b>Матчи</b>\n"]
     buttons = []
+    api_ok = True
 
-    if events:
-        for e in events[:10]:
-            title = e.get("title", e.get("name", "?"))
-            date = (e.get("eventDate") or e.get("airDate") or "?")[:10]
-            league = e.get("league", {}).get("name", "")
-            lines.append(f"  📅 {date} • {title}")
-            if league:
-                lines.append(f"     🏆 {league}")
-            lines.append("")
-    else:
-        lines.append("Нет предстоящих матчей в ближайшие 2 недели\n")
+    if not teams:
+        lines.append("Нет отслеживаемых команд.\nСкачай матч через 🔍 Поиск → ⚽ Матч — бот предложит отслеживать команду.\n")
+        buttons.append([{"text": "➕ Добавить команду", "callback_data": "matches:add_team"}])
+        send_telegram("\n".join(lines), reply_markup={"inline_keyboard": buttons})
+        return
 
-    # Show monitored leagues
-    if leagues:
-        monitored = [l for l in leagues if l.get("monitored")]
-        if monitored:
-            lines.append(f"<b>🏆 Отслеживаемые лиги ({len(monitored)}):</b>")
-            for l in monitored:
-                events_count = l.get("eventCount", 0)
-                lines.append(f"  • {l.get('name','?')} ({events_count} событий)")
+    for team in teams:
+        tid = team.get("id", "")
+        tname = team.get("name", "?")
+        events = _get_team_next_events(tid)
 
+        if events is None:
+            api_ok = False
+            lines.append(f"<b>📌 {tname}</b>")
+            lines.append(f"  ⚠️ Ошибка получения расписания\n")
+            continue
+
+        lines.append(f"<b>📌 {tname}</b>")
+        if events:
+            for e in events[:5]:
+                date = e.get("dateEvent", "?")
+                time_str = (e.get("strTime") or "")[:5]
+                event_name = e.get("strEvent", "?")
+                league = e.get("strLeague", "")
+                time_part = f" {time_str}" if time_str else ""
+                lines.append(f"  📅 {date}{time_part} • {event_name}")
+                if league:
+                    lines.append(f"     🏆 {league}")
+        else:
+            lines.append(f"  Нет предстоящих матчей")
+        lines.append("")
+
+    if not api_ok:
+        lines.append("⚠️ <b>TheSportsDB API недоступен для некоторых команд</b>")
+
+    # Show tracked teams with remove buttons
+    lines.append(f"<b>📌 Отслеживаемые ({len(teams)}):</b>")
+    for t in teams:
+        lines.append(f"  • {t.get('name','?')} ({t.get('sport','?')})")
+        buttons.append([{"text": f"🗑 {t['name'][:30]}", "callback_data": f"track_team:remove:{t['id']}"}])
+
+    buttons.append([{"text": "➕ Добавить команду", "callback_data": "matches:add_team"}])
     buttons.append([{"text": "🔄 Обновить", "callback_data": "matches:refresh"}])
     send_telegram("\n".join(lines), reply_markup={"inline_keyboard": buttons})
 
@@ -1225,18 +1353,6 @@ def handle_prowlarr_webhook(data):
         log(f"Prowlarr grab (silent): {rel.get('releaseTitle','?')[:50]}")
 
 
-def handle_sportarr_webhook(data):
-    event = data.get("eventType", "")
-    if event == "Grab":
-        title = data.get("event", {}).get("title", data.get("title", "?"))
-        send_telegram(f"⚽ <b>Качаем матч:</b> {title[:60]}")
-        log(f"Sportarr grab: {title[:50]}")
-    elif event == "Download":
-        title = data.get("event", {}).get("title", data.get("title", "?"))
-        send_telegram(f"✅ <b>Матч готов:</b> {title[:60]}\nДоступно в Jellyfin")
-        log(f"Sportarr download: {title[:50]}")
-
-
 def handle_jellyseerr_webhook(data):
     ntype = data.get("notification_type", "")
     subject = data.get("subject", "")
@@ -1262,8 +1378,7 @@ class HubHandler(BaseHTTPRequestHandler):
         try: data = json.loads(body)
         except: return
         h = {"/radarr": handle_radarr_webhook, "/sonarr": handle_sonarr_webhook, "/jellyfin": handle_jellyfin_webhook,
-             "/webhook": handle_jellyfin_webhook, "/prowlarr": handle_prowlarr_webhook, "/jellyseerr": handle_jellyseerr_webhook,
-             "/sportarr": handle_sportarr_webhook}
+             "/webhook": handle_jellyfin_webhook, "/prowlarr": handle_prowlarr_webhook, "/jellyseerr": handle_jellyseerr_webhook}
         if self.path in h:
             log(f"Webhook {self.path}: {data.get('eventType', data.get('NotificationType', data.get('notification_type', '?')))}")
             h[self.path](data)
@@ -1401,7 +1516,7 @@ def main():
     threading.Thread(target=poll_loop, daemon=True).start()
     threading.Thread(target=telegram_loop, daemon=True).start()
     server = HTTPServer(("0.0.0.0", PORT), HubHandler)
-    log(f"Listening :{PORT} | /radarr /sonarr /prowlarr /jellyfin /jellyseerr /sportarr")
+    log(f"Listening :{PORT} | /radarr /sonarr /prowlarr /jellyfin /jellyseerr")
     try: server.serve_forever()
     except KeyboardInterrupt: server.server_close()
 
