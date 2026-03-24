@@ -166,6 +166,10 @@ services:
       - PROWLARR_KEY=${PROWLARR_KEY}
       - JELLYSEERR_URL=http://jellyseerr:5055
       - JELLYFIN_URL=http://jellyfin:8096/jellyfin
+      - JELLYFIN_USER=${JELLYFIN_USER:-admin}
+      - JELLYFIN_PASSWORD=${JELLYFIN_PASSWORD:-changeme}
+      - SPORTARR_URL=http://sportarr:1867
+      - SPORTARR_KEY=${SPORTARR_KEY:-a567155924464878ac00a69fcf3cc196}
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - QB_PASSWORD=${QB_PASSWORD}
