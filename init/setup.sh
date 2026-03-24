@@ -799,9 +799,86 @@ fi
 echo ""
 
 # ============================================
-# Phase 12: Final verification
+# Phase 12: Configure Sportarr
 # ============================================
-step "13/14: Cleaning orphaned downloads..."
+step "13/16: Configuring Sportarr..."
+
+SP_URL="http://127.0.0.1:1867"
+SP_KEY=$(docker exec sportarr grep -oP '(?<=<ApiKey>)[^<]+' /config/config.xml 2>/dev/null) || true
+if [ -z "$SP_KEY" ]; then
+  # Try from DB or settings
+  SP_KEY=$(curl -s "$SP_URL/api/settings" -H "X-Api-Key: dummy" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('apiKey',''))" 2>/dev/null) || true
+fi
+# Fallback: read from appsettings
+if [ -z "$SP_KEY" ]; then
+  SP_KEY=$(docker exec sportarr cat /config/appsettings.json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('Security',{}).get('ApiKey',''))" 2>/dev/null) || true
+fi
+
+SP_AUTH="-H \"X-Api-Key: $SP_KEY\""
+
+if [ -n "$SP_KEY" ]; then
+  log "  Sportarr API key: ${SP_KEY:0:8}..."
+
+  # Add qBittorrent download client
+  EXISTING_DC=$(curl -s "$SP_URL/api/downloadclient" -H "X-Api-Key: $SP_KEY" 2>/dev/null)
+  DC_COUNT=$(echo "$EXISTING_DC" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null) || true
+  if [ "${DC_COUNT:-0}" = "0" ]; then
+    log "  Adding qBittorrent..."
+    curl -s -X POST "$SP_URL/api/downloadclient" -H "X-Api-Key: $SP_KEY" -H "Content-Type: application/json" \
+      -d "{\"name\":\"qBittorrent\",\"host\":\"qbittorrent\",\"port\":8080,\"username\":\"admin\",\"password\":\"${QB_PASSWORD:-adminadmin}\",\"category\":\"sports\",\"enabled\":true}" > /dev/null 2>&1
+  fi
+
+  # Add root folder
+  EXISTING_RF=$(curl -s "$SP_URL/api/rootfolder" -H "X-Api-Key: $SP_KEY" 2>/dev/null)
+  RF_COUNT=$(echo "$EXISTING_RF" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null) || true
+  if [ "${RF_COUNT:-0}" = "0" ]; then
+    log "  Adding root folder /sports..."
+    curl -s -X POST "$SP_URL/api/rootfolder" -H "X-Api-Key: $SP_KEY" -H "Content-Type: application/json" \
+      -d "{\"path\":\"/sports\"}" > /dev/null 2>&1
+  fi
+
+  # Add Prowlarr as Torznab indexer
+  EXISTING_IX=$(curl -s "$SP_URL/api/indexer" -H "X-Api-Key: $SP_KEY" 2>/dev/null)
+  IX_COUNT=$(echo "$EXISTING_IX" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null) || true
+  if [ "${IX_COUNT:-0}" = "0" ]; then
+    P_KEY=$(docker exec prowlarr grep -o '<ApiKey>[^<]*' /config/prowlarr/config.xml 2>/dev/null | cut -d'>' -f2) || true
+    if [ -z "$P_KEY" ]; then
+      P_KEY=$(grep -o '<ApiKey>[^<]*' /config/prowlarr/config.xml 2>/dev/null | cut -d'>' -f2) || true
+    fi
+    if [ -n "$P_KEY" ]; then
+      # Add each Prowlarr indexer as Torznab source
+      INDEXER_IDS=$(curl -s "http://127.0.0.1:9696/prowlarr/api/v1/indexer" -H "X-Api-Key: $P_KEY" 2>/dev/null \
+        | python3 -c "import json,sys; [print(f'{i[\"id\"]}:{i[\"name\"]}') for i in json.load(sys.stdin)]" 2>/dev/null) || true
+      for IDX in $INDEXER_IDS; do
+        IDX_ID=$(echo "$IDX" | cut -d: -f1)
+        IDX_NAME=$(echo "$IDX" | cut -d: -f2-)
+        log "  Adding indexer: $IDX_NAME..."
+        curl -s -X POST "$SP_URL/api/indexer" -H "X-Api-Key: $SP_KEY" -H "Content-Type: application/json" \
+          -d "{\"name\":\"$IDX_NAME\",\"implementation\":\"Torznab\",\"configContract\":\"TorznabSettings\",\"protocol\":\"torrent\",\"enable\":true,\"fields\":[{\"name\":\"baseUrl\",\"value\":\"http://gluetun:9696/prowlarr/$IDX_ID/api\"},{\"name\":\"apiKey\",\"value\":\"$P_KEY\"},{\"name\":\"categories\",\"value\":\"5000,5060,5070\"}]}" > /dev/null 2>&1
+      done
+    fi
+  fi
+
+  # Add webhook to media-hub
+  EXISTING_NF=$(curl -s "$SP_URL/api/notification" -H "X-Api-Key: $SP_KEY" 2>/dev/null)
+  NF_COUNT=$(echo "$EXISTING_NF" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null) || true
+  if [ "${NF_COUNT:-0}" = "0" ]; then
+    log "  Adding webhook → media-hub..."
+    curl -s -X POST "$SP_URL/api/notification" -H "X-Api-Key: $SP_KEY" -H "Content-Type: application/json" \
+      -d "{\"name\":\"media-hub\",\"implementation\":\"Webhook\",\"configContract\":\"WebhookSettings\",\"fields\":[{\"name\":\"url\",\"value\":\"http://media-hub:9999/sportarr\"},{\"name\":\"method\",\"value\":1}],\"onGrab\":true,\"onDownload\":true,\"onUpgrade\":true,\"tags\":[]}" > /dev/null 2>&1
+  fi
+
+  log "  ✓ Sportarr configured"
+else
+  warn "  Could not get Sportarr API key, skipping"
+fi
+
+echo ""
+
+# ============================================
+# Phase 13: Cleaning orphaned downloads
+# ============================================
+step "14/16: Cleaning orphaned downloads..."
 
 # Clean downloads that have no matching torrent in qBittorrent
 QB_COOKIE_CLEAN=""
@@ -859,7 +936,7 @@ echo ""
 # ============================================
 # Phase 14: Final verification
 # ============================================
-step "14/14: Verifying all services..."
+step "15/16: Verifying all services..."
 
 VERIFY_OK=0
 VERIFY_FAIL=0
