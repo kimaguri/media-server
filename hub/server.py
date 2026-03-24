@@ -33,7 +33,8 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 PORT = int(os.environ.get("PORT", "9999"))
 AUTO_SEARCH_HOURS = int(os.environ.get("AUTO_SEARCH_HOURS", "6"))
 TEAMS_FILE = os.environ.get("TEAMS_FILE", "/data/teams.json")
-SPORTSDB_API = "https://www.thesportsdb.com/api/v1/json/3"
+ESPN_API = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+ESPN_LEAGUES = ["esp.1", "uefa.champions", "esp.copa_del_rey", "esp.supercopa", "fifa.cwc", "uefa.super_cup"]
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -742,49 +743,80 @@ def _save_teams(teams):
         log(f"Save teams error: {e}")
 
 
-def _sportsdb_get(endpoint):
-    """Call TheSportsDB free API."""
+def _espn_get(path):
+    """Call ESPN public API."""
     try:
-        url = f"{SPORTSDB_API}/{endpoint}"
+        url = f"{ESPN_API}/{path}"
         req = urllib.request.Request(url, headers={"User-Agent": "media-hub/1.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read())
     except Exception as e:
-        log(f"TheSportsDB error: {endpoint}: {e}")
+        log(f"ESPN API error: {path}: {e}")
         return None
 
 
 def _search_team(name):
-    """Search for a team by name. Returns list of matches."""
-    data = _sportsdb_get(f"searchteams.php?t={urllib.parse.quote(name)}")
-    if not data or not data.get("teams"):
-        return []
-    return data["teams"]
+    """Search for a team by name across ESPN soccer leagues."""
+    results = []
+    seen = set()
+    for league in ESPN_LEAGUES[:3]:  # Search top 3 leagues only (speed)
+        data = _espn_get(f"{league}/teams")
+        if not data:
+            continue
+        for group in data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", []):
+            t = group.get("team", {})
+            tid = t.get("id", "")
+            tname = t.get("displayName", "")
+            if tid in seen:
+                continue
+            if name.lower() in tname.lower():
+                seen.add(tid)
+                results.append({
+                    "id": tid, "name": tname,
+                    "sport": "Soccer",
+                    "league": t.get("league", {}).get("name", data.get("sports", [{}])[0].get("leagues", [{}])[0].get("name", "?")),
+                    "slug": t.get("slug", ""),
+                })
+    return results
 
 
 def _get_team_next_events(team_id):
-    """Get upcoming events for a team (all tournaments)."""
-    data = _sportsdb_get(f"eventsnext.php?id={team_id}")
-    if not data or not data.get("events"):
-        return []
-    return data["events"]
+    """Get upcoming events for a team across ALL leagues."""
+    events = []
+    api_errors = 0
+    for league in ESPN_LEAGUES:
+        data = _espn_get(f"{league}/teams/{team_id}")
+        if data is None:
+            api_errors += 1
+            continue
+        team = data.get("team", {})
+        for e in team.get("nextEvent", []):
+            date = e.get("date", "")
+            name = e.get("name", e.get("shortName", "?"))
+            league_name = data.get("sports", [{}])[0].get("leagues", [{}])[0].get("name", "") if data.get("sports") else league
+            events.append({"date": date, "name": name, "league": league_name})
+    # Sort by date
+    events.sort(key=lambda x: x.get("date", ""))
+    # Return None if ALL requests failed (API down)
+    if api_errors == len(ESPN_LEAGUES) and not events:
+        return None
+    return events
 
 
 def _add_team(team_name, message_id):
-    """Search TheSportsDB for team, add to tracked list."""
+    """Search ESPN for team, add to tracked list."""
     results = _search_team(team_name)
     if not results:
         edit_message(message_id, f"❌ Команда \"{team_name}\" не найдена")
         return
 
     team = results[0]
-    tid = team.get("idTeam", "")
-    tname = team.get("strTeam", team_name)
-    sport = team.get("strSport", "?")
-    league = team.get("strLeague", "?")
+    tid = team.get("id", "")
+    tname = team.get("name", team_name)
+    sport = team.get("sport", "Soccer")
+    league = team.get("league", "?")
 
     teams = _load_teams()
-    # Check not already tracked
     if any(t.get("id") == tid for t in teams):
         edit_message(message_id, f"✅ {tname} уже отслеживается")
         return
@@ -792,15 +824,15 @@ def _add_team(team_name, message_id):
     teams.append({"id": tid, "name": tname, "sport": sport, "league": league})
     _save_teams(teams)
 
-    # Get upcoming matches
     events = _get_team_next_events(tid)
-    lines = [f"✅ <b>{tname}</b> добавлен для отслеживания\n🏆 {league} • {sport}\n"]
+    lines = [f"✅ <b>{tname}</b> добавлен для отслеживания\n🏆 {league}\n"]
     if events:
-        lines.append(f"<b>Ближайшие матчи:</b>")
+        lines.append("<b>Ближайшие матчи:</b>")
         for e in events[:5]:
-            date = (e.get("dateEvent") or "?")
-            lines.append(f"  📅 {date} • {e.get('strEvent', '?')}")
-            lines.append(f"     🏆 {e.get('strLeague', '')}")
+            date = e.get("date", "?")[:16].replace("T", " ")
+            lines.append(f"  📅 {date} • {e.get('name', '?')}")
+            if e.get("league"):
+                lines.append(f"     🏆 {e['league']}")
     else:
         lines.append("Нет предстоящих матчей")
 
@@ -820,7 +852,7 @@ def _remove_team(team_id, message_id):
 
 
 def _add_team_via_search(query):
-    """Search TheSportsDB and offer team selection."""
+    """Search ESPN and offer team selection."""
     results = _search_team(query)
     if not results:
         send_telegram(f"❌ Ничего не найдено по запросу \"{query}\"")
@@ -832,15 +864,13 @@ def _add_team_via_search(query):
     lines = [f"⚽ <b>Результаты: {query}</b>\n"]
     buttons = []
     for t in results[:8]:
-        tid = t.get("idTeam", "")
-        name = t.get("strTeam", "?")
-        sport = t.get("strSport", "?")
-        league = t.get("strLeague", "?")
-        country = t.get("strCountry", "")
+        tid = t.get("id", "")
+        name = t.get("name", "?")
+        league = t.get("league", "?")
         already = " ✅" if tid in tracked_ids else ""
-        lines.append(f"  • {name} ({sport}, {league}){already}")
+        lines.append(f"  • {name} ({league}){already}")
         if tid not in tracked_ids:
-            buttons.append([{"text": f"📌 {name} — {sport}", "callback_data": f"track_team:add:{name}"}])
+            buttons.append([{"text": f"📌 {name} — {league}", "callback_data": f"track_team:add:{name}"}])
 
     if not buttons:
         lines.append("\nВсе команды уже отслеживаются!")
@@ -1116,12 +1146,10 @@ def show_matches():
         lines.append(f"<b>📌 {tname}</b>")
         if events:
             for e in events[:5]:
-                date = e.get("dateEvent", "?")
-                time_str = (e.get("strTime") or "")[:5]
-                event_name = e.get("strEvent", "?")
-                league = e.get("strLeague", "")
-                time_part = f" {time_str}" if time_str else ""
-                lines.append(f"  📅 {date}{time_part} • {event_name}")
+                date = e.get("date", "?")[:16].replace("T", " ")
+                event_name = e.get("name", "?")
+                league = e.get("league", "")
+                lines.append(f"  📅 {date} • {event_name}")
                 if league:
                     lines.append(f"     🏆 {league}")
         else:
@@ -1129,7 +1157,7 @@ def show_matches():
         lines.append("")
 
     if not api_ok:
-        lines.append("⚠️ <b>TheSportsDB API недоступен для некоторых команд</b>")
+        lines.append("⚠️ <b>ESPN API недоступен для некоторых команд</b>")
 
     # Show tracked teams with remove buttons
     lines.append(f"<b>📌 Отслеживаемые ({len(teams)}):</b>")
