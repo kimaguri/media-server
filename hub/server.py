@@ -335,8 +335,20 @@ def _clean_search_term(title):
     return search
 
 
+def _detect_season(title):
+    """Extract season number from release title. Returns int or None."""
+    m = re.search(r'S(\d+)', title, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    m = re.search(r'Season\s*(\d+)', title, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    return None
+
+
 def ensure_in_sonarr(release):
-    """Ensure series exists in Sonarr. Add via lookup if missing. Returns series ID or None."""
+    """Ensure series exists in Sonarr. Add via lookup if missing. Returns series ID or None.
+    Only monitors the season from the release title, not all seasons."""
     title = release.get("title", "")
     tvdb_id = release.get("tvdbId", 0)
 
@@ -371,13 +383,30 @@ def ensure_in_sonarr(release):
             if s.get("tvdbId") == match.get("tvdbId"):
                 return s["id"]
 
+    # Detect which season the user wants from the release title
+    target_season = _detect_season(title)
+
+    # Build seasons list — only monitor the target season (+ specials off)
+    seasons = []
+    for s in match.get("seasons", []):
+        sn = s.get("seasonNumber", 0)
+        if sn == 0:
+            seasons.append({"seasonNumber": 0, "monitored": False})
+        elif target_season and sn == target_season:
+            seasons.append({"seasonNumber": sn, "monitored": True})
+        elif not target_season:
+            # No season detected in title — monitor all (fallback)
+            seasons.append({"seasonNumber": sn, "monitored": True})
+        else:
+            seasons.append({"seasonNumber": sn, "monitored": False})
+
     # Add to Sonarr
     payload = {
         "tvdbId": match["tvdbId"],
         "title": match.get("title", search),
         "titleSlug": match.get("titleSlug", ""),
         "images": match.get("images", []),
-        "seasons": match.get("seasons", []),
+        "seasons": seasons,
         "qualityProfileId": 1,
         "languageProfileId": 1,
         "rootFolderPath": "/tv",
@@ -388,7 +417,8 @@ def ensure_in_sonarr(release):
     }
     added = api_post(f"{SONARR_URL}/api/v3/series", SONARR_KEY, payload)
     if added and isinstance(added, dict) and added.get("id"):
-        log(f"Added to Sonarr: {match.get('title')} (tvdb:{match['tvdbId']})")
+        season_info = f" (season {target_season})" if target_season else " (all seasons)"
+        log(f"Added to Sonarr: {match.get('title')} (tvdb:{match['tvdbId']}){season_info}")
         time.sleep(3)  # Let Sonarr index the new series before push
         return added["id"]
     log(f"Failed to add to Sonarr: {match.get('title')}")
@@ -1015,7 +1045,12 @@ class HubHandler(BaseHTTPRequestHandler):
 def auto_search():
     series = api_get(f"{SONARR_URL}/api/v3/series", SONARR_KEY)
     if not series: return
-    continuing = [s for s in series if s.get("status") == "continuing" and s.get("monitored")]
+    # Only search continuing series that already have some files downloaded
+    # (skip freshly added series with 0 files to avoid mass downloading)
+    continuing = [s for s in series
+                  if s.get("status") == "continuing"
+                  and s.get("monitored")
+                  and s.get("statistics", {}).get("episodeFileCount", 0) > 0]
     if not continuing: return
     log(f"Auto-search: {len(continuing)} continuing series")
     for s in continuing:
