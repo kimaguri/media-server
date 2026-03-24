@@ -1084,7 +1084,29 @@ def do_cancel_download(hash_prefix):
             api_delete(f"{RADARR_URL}/api/v3/queue/{item['id']}?removeFromClient=false&blocklist=false", RADARR_KEY)
             log(f"Removed from Radarr queue: {item.get('title','?')[:50]}")
 
+    # Clean up empty series/movies added by ensure_in_* (0 files = useless)
+    _cleanup_empty_entries()
+
     send_telegram(f"🛑 <b>Остановлено:</b> {name[:50]}\nТоррент и файлы удалены")
+
+
+def _cleanup_empty_entries():
+    """Remove series/movies from Sonarr/Radarr that have 0 files (added but never downloaded)."""
+    series = api_get(f"{SONARR_URL}/api/v3/series", SONARR_KEY) or []
+    for s in series:
+        if s.get("statistics", {}).get("episodeFileCount", 0) == 0:
+            api_delete(f"{SONARR_URL}/api/v3/series/{s['id']}?deleteFiles=true", SONARR_KEY)
+            log(f"Cleanup: removed empty series {s.get('title','?')}")
+
+    movies = api_get(f"{RADARR_URL}/api/v3/movie", RADARR_KEY) or []
+    for m in movies:
+        if not m.get("hasFile") and m.get("status") == "released":
+            # Only remove if no active download
+            queue = api_get(f"{RADARR_URL}/api/v3/queue/details", RADARR_KEY) or []
+            has_active = any(q.get("movieId") == m.get("id") for q in queue)
+            if not has_active:
+                api_delete(f"{RADARR_URL}/api/v3/movie/{m['id']}?deleteFiles=true", RADARR_KEY)
+                log(f"Cleanup: removed empty movie {m.get('title','?')}")
 
 
 def do_cancel_all_downloads():
@@ -1132,6 +1154,8 @@ def do_cancel_all_downloads():
         lines.append(f"  • {n}")
     lines.append("\nТорренты и файлы удалены. Раздачи не тронуты.")
     send_telegram("\n".join(lines))
+
+    _cleanup_empty_entries()
 
 
 def show_matches():
