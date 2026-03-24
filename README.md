@@ -1,149 +1,184 @@
 # Media Server
 
-Автоматизированный медиа-сервер для отслеживания аниме, сериалов, фильмов и футбольных матчей. Развёрнут на VPS с Docker Compose.
+Домашний медиа-сервер с Telegram-ботом для управления. Качает фильмы, сериалы, аниме — всё автоматически.
 
 **Домен:** `lampa.sadmin.app`
 
-## Как это работает
+---
 
-В стеке два режима потребления контента, которые работают параллельно:
+## Быстрый старт (для пользователя)
 
-### Режим 1: Стриминг через Lampa (ручной)
+### Что умеет бот в Telegram
 
-```
-Lampa (телефон/ТВ) → ищешь фильм → выбираешь торрент → TorrServer стримит в реальном времени
-```
+Три кнопки внизу — это всё что нужно:
 
-- Ничего не скачивается на диск сервера
-- Смотришь прямо сейчас, как YouTube
-- Качество зависит от скорости интернета
-- Подходит для: "хочу посмотреть фильм прямо сейчас"
+| Кнопка | Что делает |
+|--------|-----------|
+| 🔍 **Поиск** | Найти и скачать фильм/сериал/аниме |
+| 📊 **Статус** | Что сейчас качается, раздаётся, перемещается |
+| 📋 **Список** | Всё что мониторится и уже скачано |
 
-### Режим 2: Автоматическая качка (автопилот)
+Можно просто **написать название** — бот найдёт на всех трекерах сразу.
 
-```
-Sonarr/Radarr мониторят → Prowlarr ищет на трекерах → qBittorrent качает → Bazarr добавляет субтитры → Telegram уведомляет
-```
-
-- Добавляешь сериал/фильм один раз — дальше всё автоматически
-- Новые серии Naruto? Скачаются сами, с субтитрами, уведомление в Telegram
-- Файлы на диске в максимальном качестве
-- После просмотра: Trakt.tv отмечает → Deleterr удаляет через N дней
-- Подходит для: "хочу следить за сериалами на автопилоте"
-
-### Пайплайн автоудаления просмотренного
+### Как скачать фильм
 
 ```
-Смотришь в Lampa → TraktTV плагин отправляет scrobble → ≥80% просмотрено = watched
-→ Deleterr видит в Trakt API → ждёт grace period (7 дней фильмы / 14 дней сериалы)
-→ удаляет файл + unmonitor в Sonarr/Radarr
+1. Нажми 🔍 Поиск → 🎬 Фильм
+2. Напиши название (русское или английское)
+3. Бот покажет список торрентов с размером и качеством
+4. Нажми на нужный — скачивание начнётся
+5. Бот пришлёт уведомление когда файл готов
+6. Смотри в Jellyfin или через Lampa
 ```
 
-## Архитектура
+### Как скачать сериал/аниме
 
 ```
-┌──────────────────────────────┐
-│  Gluetun VPN (Netherlands)   │
-│  ├── Prowlarr (поиск)        │──── HTTP ────→ RuTracker, Nyaa.si, Rutor
-│  └── Radarr (фильмы)         │               (заблокированные РКН)
-└──────────┬───────────────────┘
-           │ Docker internal network
-           ▼
-┌────────────────────────────────────────────────────────┐
-│  Прямая сеть VPS (полная скорость)                     │
-│  ├── qBittorrent ←── P2P скачивание ←── пиры           │
-│  ├── Sonarr ←→ Prowlarr + qBittorrent (сериалы/аниме)  │
-│  ├── Bazarr ←→ Sonarr/Radarr (субтитры RU/EN)          │
-│  ├── TorrServer ←── стриминг ←── Lampa (телефон/ТВ)    │
-│  ├── Seerr ←→ Sonarr/Radarr (UI для запросов)          │
-│  ├── Deleterr ←→ Trakt.tv + Sonarr/Radarr (автоудал.)  │
-│  └── Caddy (reverse proxy, HTTPS, Let's Encrypt)        │
-└────────────────────────────────────────────────────────┘
+1. Нажми 🔍 Поиск → 📺 Сериал
+2. Напиши название
+3. Выбери нужный торрент (сезонпак или отдельные серии)
+4. Новые серии будут скачиваться АВТОМАТИЧЕСКИ
+5. Уведомления в Telegram о каждой новой серии
 ```
 
-## Что установлено и зачем
+### Как удалить
 
-| Сервис | Назначение | За VPN? |
-|--------|-----------|---------|
-| **Gluetun** | VPN-тоннель (WireGuard/ProtonVPN Free). Даёт NL IP для доступа к заблокированным трекерам | Сам является VPN |
-| **Prowlarr** | Менеджер индексеров. Ходит на RuTracker, Nyaa.si, Rutor и другие трекеры для поиска торрентов. Синхронизирует индексеры в Sonarr/Radarr | **Да** — трекеры заблокированы РКН |
-| **Radarr** | Автоматическое отслеживание и скачивание фильмов. Мониторит новые релизы, отправляет торренты в qBittorrent | **Да** — api.radarr.video блокирует дата-центровые IP (Cloudflare) |
-| **Sonarr** | Автоматическое отслеживание сериалов и аниме. Мониторит новые эпизоды, скачивает автоматически | Нет |
-| **qBittorrent** | Торрент-клиент. Скачивает файлы на полной скорости VPS (без VPN, чтобы не замедлять) | Нет |
-| **Bazarr** | Автоматические субтитры. Подтягивает RU/EN субтитры из OpenSubtitles, Podnapisi | Нет |
-| **TorrServer** | Стриминг торрентов. Lampa на телефоне/ТВ отправляет magnet-ссылку → TorrServer стримит видео в реальном времени без скачивания на диск | Нет |
-| **Seerr** | Веб-интерфейс для запросов контента. Удобный мобильный UI для добавления фильмов/сериалов в Sonarr/Radarr | Нет |
-| **Deleterr** | Автоудаление просмотренного контента. Читает Trakt.tv API, удаляет файлы после grace period | Нет |
-| **Jellyfin** | Медиа-сервер. Сканирует скачанные файлы, создаёт библиотеку с постерами/метаданными, стримит на устройства. Интеграция с Lampa через плагин | Нет |
-| **Caddy** | Reverse proxy с автоматическим HTTPS (Let's Encrypt). Все сервисы доступны через один домен | Нет |
-| **Sportarr** | Отслеживание спортивных трансляций (La Liga, Barcelona) | Нет |
+Удаляешь из Jellyfin → автоматически удаляется отовсюду:
+- Из Sonarr/Radarr (файлы)
+- Из qBittorrent (торрент перестаёт раздаваться)
+- Уведомление в Telegram: "🗑 Удалено"
 
-## Зачем VPN
+### Где смотреть
 
-VPN решает **одну задачу**: доступ к сайтам трекеров, заблокированных РКН (RuTracker, Nyaa.si и др.).
+| Способ | Когда использовать |
+|--------|-------------------|
+| **Jellyfin** (`lampa.sadmin.app/jellyfin`) | Библиотека со скачанными файлами, постеры, метаданные |
+| **Lampa** (приложение на телефоне/ТВ) | Стриминг торрентов в реальном времени, без скачивания |
 
-- **Prowlarr** — делает HTTP-запросы к трекерам для поиска → нужен VPN
-- **Radarr** — его API (api.radarr.video) блокирует дата-центровые IP → нужен VPN
-- **qBittorrent** — скачивает P2P напрямую, без VPN, на полной скорости VPS
-- **Все остальные** — работают без VPN
+---
 
-ProtonVPN Free подходит, потому что Prowlarr/Radarr делают обычные HTTP-запросы, а не P2P-трафик.
+## Как всё работает (полная схема)
 
-## URL-адреса
+### Два режима просмотра
 
-| Сервис | URL |
-|--------|-----|
-| Sonarr | `https://lampa.sadmin.app/sonarr` |
-| Radarr | `https://lampa.sadmin.app/radarr` |
-| Prowlarr | `https://lampa.sadmin.app/prowlarr` |
-| qBittorrent | `https://lampa.sadmin.app/qbt/` |
-| Bazarr | `https://lampa.sadmin.app/bazarr` |
-| Seerr | `https://lampa.sadmin.app/seerr` |
-| Deleterr | `https://lampa.sadmin.app/deleterr` |
-| TorrServer | `https://lampa.sadmin.app/torrserver/` |
-
-> qBittorrent и TorrServer требуют trailing slash (`/qbt/`, `/torrserver/`), т.к. не поддерживают URL Base нативно.
-
-## Порты
-
-| Сервис | Порт | Bind | Открыт наружу? |
-|--------|------|------|----------------|
-| Gluetun (Prowlarr) | 9696 | 127.0.0.1 | Нет, через Caddy |
-| Gluetun (Radarr) | 7878 | 127.0.0.1 | Нет, через Caddy |
-| qBittorrent WebUI | 8080 | 127.0.0.1 | Нет, через Caddy |
-| qBittorrent P2P | 6881 | 0.0.0.0 | Да (нужно для пиров) |
-| Sonarr | 8989 | 127.0.0.1 | Нет, через Caddy |
-| Bazarr | 6767 | 127.0.0.1 | Нет, через Caddy |
-| TorrServer | 8090 | 0.0.0.0 | Да (для Lampa) |
-| Seerr | 5055 | 127.0.0.1 | Нет, через Caddy |
-| Deleterr | 8082 | 127.0.0.1 | Нет, через Caddy |
-| Caddy HTTP | 80 | 0.0.0.0 | Да |
-| Caddy HTTPS | 443 | 0.0.0.0 | Да |
-
-## Коммуникации между сервисами
+**Режим 1: Скачивание через бота (основной)**
 
 ```
-Prowlarr (VPN) ───HTTP поиск───→ RuTracker, Nyaa.si, Rutor
-Prowlarr (VPN) ───sync────────→ Sonarr/Radarr (Docker DNS)
-Sonarr/Radarr  ───.torrent─────→ qBittorrent (прямая сеть)
-qBittorrent    ───P2P──────────→ Интернет (полная скорость VPS)
-qBittorrent    ───complete─────→ Sonarr/Radarr (webhook)
-Bazarr         ───API──────────→ Sonarr/Radarr + провайдеры субтитров
-Seerr          ───API──────────→ Sonarr/Radarr
-Lampa (моб)    ───stream───────→ TorrServer
-Lampa (Trakt)  ───watched─────→ Trakt.tv (бесплатный)
-Deleterr       ───poll─────────→ Trakt.tv API → удаление через Sonarr/Radarr
-*arr сервисы   ───notify───────→ Telegram Bot
+Ты пишешь в Telegram
+    ↓
+Media Hub ищет на трекерах через Prowlarr
+    ↓
+Ты выбираешь торрент
+    ↓
+Media Hub добавляет фильм/сериал в Sonarr или Radarr
+    ↓
+Sonarr/Radarr отправляет торрент в qBittorrent
+    ↓
+qBittorrent скачивает → файл импортируется в /tv/ или /movies/
+    ↓
+Bazarr подтягивает субтитры (RU/EN)
+    ↓
+Jellyfin видит файл → доступен для просмотра
+    ↓
+Торрент продолжает раздаваться
 ```
 
-## Бесплатные внешние сервисы
+**Режим 2: Стриминг через Lampa (ручной)**
 
-| Сервис | Зачем | Стоимость |
-|--------|-------|-----------|
-| ProtonVPN Free | VPN для Prowlarr/Radarr (доступ к трекерам) | $0 |
-| Trakt.tv | Трекинг просмотренного → автоудаление | $0 |
-| OpenSubtitles.com | Провайдер субтитров для Bazarr | $0 |
-| Telegram Bot | Уведомления о скачивании | $0 |
+```
+Открываешь Lampa → ищешь фильм → выбираешь торрент → смотришь прямо сейчас
+```
+
+Ничего не качается на сервер. TorrServer стримит видео как YouTube.
+
+### Что происходит при удалении
+
+```
+Удаляешь из Jellyfin
+    ↓
+Jellyfin Webhook → media-hub
+    ↓
+media-hub удаляет из Sonarr/Radarr (файлы с диска)
+    ↓
+media-hub удаляет торрент из qBittorrent
+    ↓
+Telegram: "🗑 Удалено: Название"
+```
+
+### Архитектура
+
+```
+                    ┌─────────────────────┐
+                    │   Telegram Bot      │
+                    │   (ты пишешь сюда)  │
+                    └────────┬────────────┘
+                             │
+                    ┌────────▼────────────┐
+                    │    Media Hub        │
+                    │  (мозг системы)     │
+                    │  - поиск            │
+                    │  - уведомления      │
+                    │  - каскадное удал.  │
+                    └──┬──────┬───────┬───┘
+                       │      │       │
+           ┌───────────▼┐  ┌──▼───┐  ┌▼──────────┐
+           │  Prowlarr   │  │Sonarr│  │  Radarr   │
+           │  (трекеры)  │  │(сер.)│  │  (фильмы) │
+           │  через VPN  │  └──┬───┘  └──┬────────┘
+           └─────────────┘     │         │
+                          ┌────▼─────────▼───┐
+                          │   qBittorrent    │
+                          │   (качает P2P)   │
+                          │   раздаёт потом  │
+                          └────────┬─────────┘
+                                   │
+                          ┌────────▼─────────┐
+                          │   Диск сервера   │
+                          │  /movies/ /tv/   │
+                          └──┬───────────┬───┘
+                             │           │
+                    ┌────────▼──┐   ┌────▼──────┐
+                    │  Bazarr   │   │  Jellyfin │
+                    │ (субтитры)│   │ (просмотр)│
+                    └───────────┘   └───────────┘
+```
+
+### Сервисы
+
+| Сервис | Зачем | VPN? |
+|--------|-------|------|
+| **Media Hub** | Telegram-бот. Поиск, скачивание, уведомления, каскадное удаление. Мозг всей системы | Нет |
+| **Prowlarr** | Ищет торренты на RuTracker, Nyaa.si, Rutor | **Да** — трекеры заблокированы |
+| **Sonarr** | Управляет сериалами/аниме. Мониторит новые серии, импортирует файлы | Нет |
+| **Radarr** | Управляет фильмами. Импортирует файлы в правильные папки | **Да** — API заблокирован |
+| **qBittorrent** | Качает и раздаёт торренты. Раздача до удаления из Jellyfin | Нет |
+| **Bazarr** | Автоматические субтитры RU/EN | Нет |
+| **Jellyfin** | Медиа-библиотека: постеры, метаданные, стриминг на устройства | Нет |
+| **TorrServer** | Стриминг торрентов для Lampa (без скачивания на диск) | Нет |
+| **Jellyseerr** | Веб-интерфейс для запросов контента (альтернатива боту) | Нет |
+| **Sportarr** | Отслеживание спортивных трансляций | Нет |
+| **Gluetun** | VPN-тоннель для Prowlarr и Radarr | Сам VPN |
+| **Caddy** | HTTPS, reverse proxy для всех сервисов | Нет |
+
+### Зачем VPN
+
+VPN нужен только для **доступа к сайтам трекеров**, заблокированных в РФ.
+
+- Prowlarr → ходит на RuTracker/Nyaa через VPN
+- Radarr → его API блокирует дата-центровые IP
+- qBittorrent → качает **без VPN** на полной скорости
+- Всё остальное → без VPN
+
+### Уведомления в Telegram
+
+| Событие | Сообщение |
+|---------|----------|
+| Начало скачивания | ⬇️ Качаем: Название (размер, источник) |
+| Прогресс 50% | 📊 Прогресс: 50% |
+| Скачано | ✅ Скачано: Название |
+| Удалено | 🗑 Удалено: Название |
+
+---
 
 ## Установка с нуля
 
@@ -151,10 +186,11 @@ Deleterr       ───poll─────────→ Trakt.tv API → уд
 
 - VPS: Ubuntu 22.04+, 2 vCPU / 2GB+ RAM / 30GB+ SSD
 - Docker + Docker Compose
-- Домен, направленный на VPS IP
+- Домен, направленный на IP сервера
 - ProtonVPN Free аккаунт (WireGuard PrivateKey)
+- Telegram Bot Token (от @BotFather)
 
-### 1. Подготовка VPS
+### 1. Подготовка
 
 ```bash
 apt update && apt upgrade -y
@@ -171,58 +207,59 @@ ufw allow 6881/udp
 ufw --force enable
 ```
 
-### 2. Структура каталогов
+### 2. Установка
 
 ```bash
-mkdir -p /opt/media/{movies,tv,sports,downloads/complete,downloads/incomplete}
-mkdir -p /opt/media/config/{gluetun,prowlarr,qbittorrent,sonarr,radarr,bazarr,sportarr,seerr,torrserver,deleterr,caddy}
-chown -R 1000:1000 /opt/media
-```
-
-### 3. Конфигурация
-
-```bash
-cd /opt/media
-# Скопировать docker-compose.yml, Caddyfile, .env из этого репозитория
+cd /opt
+git clone https://github.com/kimaguri/media-server.git media
+cd media
 cp .env.example .env
-# Заполнить .env: VPN ключ, Telegram токен
-nano .env
-# Обновить домен в Caddyfile
-nano config/caddy/Caddyfile
+nano .env   # Заполнить: VPN ключ, Telegram токен, домен
+nano config/caddy/Caddyfile   # Обновить домен
+docker compose up -d
 ```
 
-### 4. Запуск
+Init-контейнер (`media-init`) автоматически настроит все сервисы:
+- qBittorrent: категории, пути
+- Sonarr/Radarr: download client, root folders, webhooks
+- Prowlarr: индексеры (Nyaa, RuTracker), синхронизация
+- Bazarr: языки, подключение к Sonarr/Radarr
+- Jellyfin: admin-пользователь, библиотеки
 
+После первого запуска:
 ```bash
-docker compose up -d
-# Init-контейнер автоматически настроит все сервисы:
-# - URL Base для каждого сервиса
-# - qBittorrent: пути скачивания, категории
-# - Sonarr/Radarr: download client, root folders
-# - Prowlarr: индексеры (Nyaa.si, RuTracker), синхронизация с Sonarr/Radarr
-# - Bazarr: подключение к Sonarr/Radarr, языки
-# - Jellyfin: admin пользователь, библиотеки Movies/TV
-
-# После первого запуска перезапустить для применения URL Base:
 docker compose restart sonarr radarr prowlarr bazarr jellyfin
 ```
 
-Все сервисы настраиваются автоматически через init-контейнер (`media-init`). Ручная настройка через UI не требуется.
+### 3. Настройка Lampa (опционально)
 
-**Lampa → TorrServer:**
-- Settings → TorrServer → URL: `https://your-domain.com/torrserver/`
+1. Установить Lampa (lampa.mx)
+2. Settings → TorrServer: `https://ваш-домен/torrserver/`
+3. Settings → Парсер: `https://jacred.xyz`
 
-## Настройка Lampa
+---
 
-1. Установить Lampa (lampa.mx или приложение)
-2. Settings → TorrServer: `https://lampa.sadmin.app/torrserver/`
-3. Settings → Парсер: `https://jacred.xyz` (или другой рабочий)
-4. Установить TraktTV плагин: Settings → Plugins → `https://nb557.github.io/plugins/trakt.js`
-5. Авторизовать Trakt в плагине
+## URL-адреса сервисов
+
+| Сервис | URL |
+|--------|-----|
+| Jellyfin | `https://домен/jellyfin` |
+| Sonarr | `https://домен/sonarr` |
+| Radarr | `https://домен/radarr` |
+| Prowlarr | `https://домен/prowlarr` |
+| qBittorrent | `https://домен/qbt/` |
+| Bazarr | `https://домен/bazarr` |
+| Jellyseerr | `https://домен/seerr` |
+| TorrServer | `https://домен/torrserver/` |
+| Sportarr | `https://домен/sportarr` |
+
+> qBittorrent и TorrServer требуют `/` в конце URL.
+
+---
 
 ## Обслуживание
 
-### Обновление контейнеров
+### Обновление
 
 ```bash
 cd /opt/media
@@ -230,56 +267,54 @@ docker compose pull
 docker compose up -d
 ```
 
-### Просмотр логов
+### Логи
 
 ```bash
-docker compose logs -f gluetun     # VPN
-docker compose logs -f prowlarr    # Индексеры
-docker compose logs -f sonarr      # Сериалы
-docker compose logs -f qbittorrent # Торренты
+docker compose logs -f media-hub    # Telegram-бот
+docker compose logs -f sonarr       # Сериалы
+docker compose logs -f qbittorrent  # Торренты
+docker compose logs -f gluetun      # VPN
 ```
 
 ### Проверка VPN
 
 ```bash
-# Prowlarr/Radarr через VPN (должен быть NL IP):
-docker exec gluetun wget -qO- https://ipinfo.io/ip
-
-# qBittorrent напрямую (должен быть VPS IP):
-docker exec qbittorrent wget -qO- https://ipinfo.io/ip
+docker exec gluetun wget -qO- https://ipinfo.io/ip    # NL IP
+docker exec qbittorrent wget -qO- https://ipinfo.io/ip # VPS IP
 ```
 
-### Бэкап конфигурации
+### Бэкап
 
 ```bash
 tar -czf /root/media-backup-$(date +%Y%m%d).tar.gz /opt/media/config/
 ```
 
-## Структура файлов на VPS
+---
+
+## Структура на диске
 
 ```
 /opt/media/
 ├── docker-compose.yml
-├── .env                          # Секреты (VPN ключ, Telegram токен)
-├── config/
-│   ├── gluetun/                  # VPN конфигурация
-│   ├── prowlarr/                 # Индексеры, связи с arr
-│   ├── radarr/                   # Фильмы, профили качества
-│   ├── sonarr/                   # Сериалы, профили качества
-│   ├── qbittorrent/              # Торрент-клиент
-│   ├── bazarr/                   # Субтитры
-│   ├── sportarr/                 # Спорт
-│   ├── seerr/                    # UI для запросов
-│   ├── deleterr/                 # Автоудаление
-│   ├── torrserver/               # Стриминг для Lampa
-│   └── caddy/
-│       ├── Caddyfile             # Reverse proxy конфигурация
-│       ├── data/                 # HTTPS сертификаты
-│       └── config/
-├── downloads/
-│   ├── complete/                 # Завершённые загрузки
-│   └── incomplete/               # Незавершённые загрузки
-├── movies/                       # Фильмы (Radarr)
-├── tv/                           # Сериалы/аниме (Sonarr)
-└── sports/                       # Спорт (Sportarr)
+├── .env                    # Секреты
+├── hub/                    # Media Hub (Telegram-бот)
+│   ├── server.py
+│   └── Dockerfile
+├── init/                   # Автонастройка сервисов
+├── config/                 # Конфиги всех сервисов
+│   ├── sonarr/
+│   ├── radarr/
+│   ├── prowlarr/
+│   ├── qbittorrent/
+│   ├── bazarr/
+│   ├── jellyfin/
+│   ├── torrserver/
+│   ├── caddy/Caddyfile
+│   └── ...
+├── movies/                 # Фильмы (Radarr)
+├── tv/                     # Сериалы/аниме (Sonarr)
+├── sports/                 # Спорт
+└── downloads/              # Загрузки qBittorrent
+    ├── complete/
+    └── incomplete/
 ```
