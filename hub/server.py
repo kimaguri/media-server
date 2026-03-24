@@ -521,6 +521,14 @@ def handle_callback(callback):
         state.user_state[chat_id] = {"waiting_query": search_type}
         return
 
+    # Cancel download
+    if data.startswith("cancel_dl:"):
+        hash_prefix = data.split(":", 1)[1]
+        answer_callback(cb_id, "Останавливаю...")
+        edit_message(msg.get("message_id"), "🛑 Останавливаю загрузку...")
+        threading.Thread(target=do_cancel_download, args=(hash_prefix,), daemon=True).start()
+        return
+
     # Release selection from search results
     if ":" in data:
         prefix, action = data.rsplit(":", 1)
@@ -624,11 +632,8 @@ def trigger_rescan():
     log("Rescan triggered: Sonarr + Radarr + Jellyfin")
 
 
-def show_status():
-    lines = ["📊 <b>Статус</b>\n"]
-
-    # qBittorrent — single source of truth
-    torrents = []
+def _qb_session():
+    """Login to qBittorrent, return (torrents_list, cookie) or ([], None)."""
     try:
         qb_url = "http://qbittorrent:8080/api/v2"
         login_data = urllib.parse.urlencode({"username": "admin", "password": os.environ.get("QB_PASSWORD", "")}).encode()
@@ -639,9 +644,17 @@ def show_status():
         req2 = urllib.request.Request(f"{qb_url}/torrents/info")
         req2.add_header("Cookie", cookie)
         with urllib.request.urlopen(req2, timeout=5) as resp2:
-            torrents = json.loads(resp2.read())
+            return json.loads(resp2.read()), cookie
     except Exception as e:
-        log(f"QB status error: {e}")
+        log(f"QB session error: {e}")
+        return [], None
+
+
+def show_status():
+    lines = ["📊 <b>Статус</b>\n"]
+
+    torrents, _ = _qb_session()
+    if torrents is None or _ is None:
         lines.append("qBittorrent недоступен")
         send_telegram("\n".join(lines))
         return
@@ -652,9 +665,11 @@ def show_status():
         return
 
     downloading, moving, seeding, other = [], [], [], []
+    cancel_buttons = []
 
     for t in torrents:
         name = t.get("name", "?")[:50]
+        h = t.get("hash", "")
         pct = int(t.get("progress", 0) * 100)
         st = t.get("state", "")
         speed_dl = t.get("dlspeed", 0) / (1024 * 1024)
@@ -664,6 +679,7 @@ def show_status():
 
         if st in ("downloading", "forcedDL", "stalledDL", "metaDL", "allocating"):
             downloading.append(f"  ⬇️ {name}\n     {pct}% • {speed_dl:.1f} MB/s • {size}")
+            cancel_buttons.append([{"text": f"🛑 {name[:40]}", "callback_data": f"cancel_dl:{h[:20]}"}])
         elif st == "moving":
             moving.append(f"  📦 {name}\n     Перемещение...")
         elif st in ("uploading", "forcedUP", "stalledUP", "queuedUP"):
@@ -672,8 +688,10 @@ def show_status():
             other.append(f"  🔍 {name}\n     Проверка...")
         elif st in ("pausedDL", "pausedUP"):
             other.append(f"  ⏸ {name}\n     Пауза ({pct}%)")
+            cancel_buttons.append([{"text": f"🛑 {name[:40]}", "callback_data": f"cancel_dl:{h[:20]}"}])
         elif st == "queuedDL":
             other.append(f"  🕐 {name}\n     В очереди")
+            cancel_buttons.append([{"text": f"🛑 {name[:40]}", "callback_data": f"cancel_dl:{h[:20]}"}])
 
     if downloading:
         lines.append(f"<b>⬇️ Загрузка ({len(downloading)}):</b>")
@@ -692,7 +710,56 @@ def show_status():
     total_uploaded = sum(t.get("uploaded", 0) for t in torrents)
     lines.append(f"\n💾 Торренты: {fmt_size(total_size)} • Отдано: {fmt_size(total_uploaded)}")
 
-    send_telegram("\n".join(lines))
+    markup = {"inline_keyboard": cancel_buttons} if cancel_buttons else None
+    send_telegram("\n".join(lines), reply_markup=markup)
+
+
+def do_cancel_download(hash_prefix):
+    """Cancel a download: delete torrent + files from qBit, clean up Sonarr/Radarr."""
+    torrents, cookie = _qb_session()
+    if not torrents or not cookie:
+        send_telegram("❌ qBittorrent недоступен")
+        return
+
+    # Find torrent by hash prefix
+    target = None
+    for t in torrents:
+        if t.get("hash", "").startswith(hash_prefix):
+            target = t
+            break
+    if not target:
+        send_telegram("❌ Торрент не найден (уже удалён?)")
+        return
+
+    name = target.get("name", "?")
+    full_hash = target.get("hash", "")
+
+    # Delete torrent from qBittorrent with files
+    try:
+        qb_url = "http://qbittorrent:8080/api/v2"
+        data = urllib.parse.urlencode({"hashes": full_hash, "deleteFiles": "true"}).encode()
+        req = urllib.request.Request(f"{qb_url}/torrents/delete", data=data)
+        req.add_header("Cookie", cookie)
+        urllib.request.urlopen(req, timeout=10)
+        log(f"Cancelled download: {name[:50]}")
+    except Exception as e:
+        log(f"Cancel torrent error: {e}")
+
+    # Clean up Sonarr queue (if torrent was managed by Sonarr)
+    sq = api_get(f"{SONARR_URL}/api/v3/queue/details", SONARR_KEY) or []
+    for item in sq:
+        if item.get("downloadId", "").lower() == full_hash.lower():
+            api_delete(f"{SONARR_URL}/api/v3/queue/{item['id']}?removeFromClient=false&blocklist=false", SONARR_KEY)
+            log(f"Removed from Sonarr queue: {item.get('title','?')[:50]}")
+
+    # Clean up Radarr queue
+    rq = api_get(f"{RADARR_URL}/api/v3/queue/details", RADARR_KEY) or []
+    for item in rq:
+        if item.get("downloadId", "").lower() == full_hash.lower():
+            api_delete(f"{RADARR_URL}/api/v3/queue/{item['id']}?removeFromClient=false&blocklist=false", RADARR_KEY)
+            log(f"Removed from Radarr queue: {item.get('title','?')[:50]}")
+
+    send_telegram(f"🛑 <b>Остановлено:</b> {name[:50]}\nТоррент и файлы удалены")
 
 
 def show_list():
@@ -848,23 +915,17 @@ def handle_sonarr_webhook(data):
 def _qb_delete_torrents(search_name):
     """Delete torrents from qBittorrent whose name contains search_name."""
     try:
-        qb_url = "http://qbittorrent:8080/api/v2"
-        login_data = urllib.parse.urlencode({"username": "admin", "password": os.environ.get("QB_PASSWORD", "")}).encode()
-        req = urllib.request.Request(f"{qb_url}/auth/login", data=login_data)
-        req.add_header("Referer", qb_url)
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            cookie = resp.headers.get("Set-Cookie", "")
-        req2 = urllib.request.Request(f"{qb_url}/torrents/info")
-        req2.add_header("Cookie", cookie)
-        with urllib.request.urlopen(req2, timeout=5) as resp2:
-            torrents = json.loads(resp2.read())
+        torrents, cookie = _qb_session()
+        if not torrents or not cookie:
+            return
         search_lower = search_name.lower()
         hashes = [t["hash"] for t in torrents if search_lower in t.get("name", "").lower()]
         if hashes:
+            qb_url = "http://qbittorrent:8080/api/v2"
             data = urllib.parse.urlencode({"hashes": "|".join(hashes), "deleteFiles": "true"}).encode()
-            req3 = urllib.request.Request(f"{qb_url}/torrents/delete", data=data)
-            req3.add_header("Cookie", cookie)
-            urllib.request.urlopen(req3, timeout=10)
+            req = urllib.request.Request(f"{qb_url}/torrents/delete", data=data)
+            req.add_header("Cookie", cookie)
+            urllib.request.urlopen(req, timeout=10)
             log(f"Deleted {len(hashes)} torrents from qBit for: {search_name}")
     except Exception as e:
         log(f"qBit delete error: {e}")
