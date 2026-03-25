@@ -285,6 +285,43 @@ def _parse_release_tags(title):
     return " • ".join(tags) if tags else ""
 
 
+def _lookup_overview(title):
+    """Lookup description from Sonarr/Radarr (TMDB/TVDB data).
+    Returns (overview, media_title, year, media_type) or (None, ...) if not confident."""
+    search = _clean_search_term(title)
+    if not search:
+        return None, None, None, None
+
+    year_match = re.search(r'\b((?:19|20)\d{2})\b', title)
+    year = int(year_match.group(1)) if year_match else None
+    q = urllib.parse.quote(search)
+
+    # Try Sonarr first (series)
+    sonarr_hits = api_get(f"{SONARR_URL}/api/v3/series/lookup?term={q}", SONARR_KEY, timeout=10) or []
+    for s in sonarr_hits[:3]:
+        s_title = s.get("title", "").lower()
+        s_year = s.get("year", 0)
+        # Require: name matches AND (year matches OR no year in torrent title)
+        if search.lower() in s_title or s_title in search.lower():
+            if not year or abs(s_year - year) <= 1:
+                overview = s.get("overview", "")
+                if overview:
+                    return overview[:300], s.get("title"), s_year, "series"
+
+    # Try Radarr (movies)
+    radarr_hits = api_get(f"{RADARR_URL}/api/v3/movie/lookup?term={q}", RADARR_KEY, timeout=10) or []
+    for m in radarr_hits[:3]:
+        m_title = m.get("title", "").lower()
+        m_year = m.get("year", 0)
+        if search.lower() in m_title or m_title in search.lower():
+            if not year or abs(m_year - year) <= 1:
+                overview = m.get("overview", "")
+                if overview:
+                    return overview[:300], m.get("title"), m_year, "movie"
+
+    return None, None, None, None
+
+
 def _format_release_detail(release):
     """Full detail view for a single release."""
     title = release.get("title", "?")
@@ -309,6 +346,13 @@ def _format_release_detail(release):
     tags = _parse_release_tags(title)
     if tags:
         lines.append(f"\n{tags}")
+
+    # Description from TMDB/TVDB via Sonarr/Radarr
+    overview, media_title, media_year, media_type = _lookup_overview(title)
+    if overview:
+        type_icon = "📺" if media_type == "series" else "🎬"
+        lines.append(f"\n{type_icon} <b>{media_title}</b> ({media_year})")
+        lines.append(f"<i>{overview}</i>")
 
     return "\n".join(lines)
 
