@@ -123,7 +123,8 @@ def send_telegram(text, reply_markup=None, chat_id=None):
 
 
 def edit_message(message_id, text, reply_markup=None):
-    data = {"chat_id": TELEGRAM_CHAT_ID, "message_id": message_id, "text": text, "parse_mode": "HTML"}
+    target = getattr(_active_chat, "id", None) or TELEGRAM_CHAT_ID
+    data = {"chat_id": target, "message_id": message_id, "text": text, "parse_mode": "HTML"}
     if reply_markup:
         data["reply_markup"] = reply_markup
     tg("editMessageText", data)
@@ -236,33 +237,67 @@ def prowlarr_search(query):
     return results
 
 
-def send_search_results(query, results, callback_prefix):
-    """Send search results with inline keyboard buttons."""
+RESULTS_PER_PAGE = 5
+
+
+def send_search_results(query, results, callback_prefix, page=0, message_id=None):
+    """Send search results with pagination and numbered download buttons."""
     if not results:
         send_telegram(f"❌ <b>Не найдено:</b> {query}")
         return
-    # Filter only with seeders, limit to 15
-    filtered = [r for r in results if (r.get("seeders") or 0) > 0][:15]
+    # Filter only with seeders (keep all for pagination)
+    filtered = [r for r in results if (r.get("seeders") or 0) > 0]
     if not filtered:
-        filtered = results[:5]
+        filtered = results[:10]
 
-    lines = [f"🔍 <b>{query}</b>\n"]
-    buttons = []
     state.search_results[callback_prefix] = filtered
+    total = len(filtered)
+    total_pages = (total + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE
+    page = max(0, min(page, total_pages - 1))
 
-    for i, r in enumerate(filtered):
+    start = page * RESULTS_PER_PAGE
+    end = min(start + RESULTS_PER_PAGE, total)
+    page_items = filtered[start:end]
+
+    lines = [f"🔍 <b>{query}</b>"]
+    if total_pages > 1:
+        lines[0] += f" (стр. {page + 1}/{total_pages})"
+    lines.append("")
+
+    for i, r in enumerate(page_items):
         idx = r.get("indexer", "?")
         title = r.get("title", "?")
         size = fmt_size(r.get("size", 0))
         seeders = r.get("seeders", 0)
         icon = "🟢" if seeders >= 10 else "🟡" if seeders >= 3 else "🔴"
-        # Short title for button, full for message
-        btn_title = title[:45] + "…" if len(title) > 45 else title
-        lines.append(f"{icon} <b>{i+1}.</b> {size} 🌱{seeders} <i>{idx}</i>\n{title}\n")
-        buttons.append([{"text": f"{i+1}. {size} 🌱{seeders} — {btn_title}", "callback_data": f"{callback_prefix}:{i}"}])
+        num = start + i + 1
+        lines.append(f"{icon} <b>{num}.</b> {size} 🌱{seeders} <i>{idx}</i>\n{title}\n")
+
+    buttons = []
+    # Download buttons — numbers in one row
+    num_row = []
+    for i in range(len(page_items)):
+        num = start + i
+        num_row.append({"text": f"⬇️ {num + 1}", "callback_data": f"{callback_prefix}:{num}"})
+    buttons.append(num_row)
+
+    # Navigation — separate row, full-width buttons
+    nav_row = []
+    if page > 0:
+        nav_row.append({"text": "← Назад", "callback_data": f"{callback_prefix}:page:{page - 1}"})
+    if page < total_pages - 1:
+        nav_row.append({"text": "Вперёд →", "callback_data": f"{callback_prefix}:page:{page + 1}"})
+    if nav_row:
+        buttons.append(nav_row)
 
     buttons.append([{"text": "❌ Отмена", "callback_data": f"{callback_prefix}:cancel"}])
-    send_telegram("\n".join(lines), {"inline_keyboard": buttons})
+
+    text = "\n".join(lines)
+    markup = {"inline_keyboard": buttons}
+    if message_id:
+        edit_message(message_id, text, reply_markup=markup)
+    else:
+        send_telegram(text, markup)
 
 
 def classify_release(release):
@@ -675,6 +710,21 @@ def handle_callback(callback):
 
     # Release selection from search results
     if ":" in data:
+        # Handle pagination: prefix:page:N
+        parts = data.split(":")
+        if len(parts) == 3 and parts[-2] == "page":
+            prefix = parts[0]
+            if prefix in state.search_results:
+                try:
+                    page = int(parts[-1])
+                    answer_callback(cb_id)
+                    query = state.search_results.get(f"{prefix}_query", "")
+                    send_search_results(query, state.search_results[prefix], prefix,
+                                        page=page, message_id=msg.get("message_id"))
+                except (ValueError, IndexError):
+                    pass
+                return
+
         prefix, action = data.rsplit(":", 1)
         if prefix in state.search_results:
             if action == "cancel":
@@ -682,8 +732,9 @@ def handle_callback(callback):
                 edit_message(msg.get("message_id"), "❌ Отменено")
                 state.search_results.pop(prefix, None)
                 state.search_results.pop(f"{prefix}_type", None)
+                state.search_results.pop(f"{prefix}_query", None)
                 state.user_state.pop(chat_id, None)
-                send_telegram("👌")  # Triggers main keyboard
+                send_telegram("👌")
                 return
             try:
                 idx = int(action)
@@ -691,14 +742,12 @@ def handle_callback(callback):
                 if 0 <= idx < len(releases):
                     rel = releases[idx]
                     answer_callback(cb_id, "Отправлено на скачивание!")
-                    # Remove search results and clear user state
                     state.search_results.pop(prefix, None)
                     state.user_state.pop(chat_id, None)
-                    # Edit original message to show selection (no duplicate notification)
                     edit_message(msg.get("message_id"),
                         f"✅ Выбрано: {rel.get('title','?')[:60]}\n{fmt_size(rel.get('size',0))} • {rel.get('indexer','?')}")
-                    # Pass the search_type so we don't re-classify
                     user_type = state.search_results.pop(f"{prefix}_type", None)
+                    state.search_results.pop(f"{prefix}_query", None)
                     threading.Thread(target=do_grab_silent, args=(rel, user_type), daemon=True).start()
                     return
             except (ValueError, IndexError):
@@ -723,8 +772,8 @@ def do_search(query, search_type):
         )] or results
 
     prefix = f"sr_{int(time.time())}"
-    # Store search_type with the results so do_grab_silent knows the user's intent
     state.search_results[f"{prefix}_type"] = search_type
+    state.search_results[f"{prefix}_query"] = query
     send_search_results(query, results, prefix)
 
 
