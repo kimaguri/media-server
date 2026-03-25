@@ -33,6 +33,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 PORT = int(os.environ.get("PORT", "9999"))
 AUTO_SEARCH_HOURS = int(os.environ.get("AUTO_SEARCH_HOURS", "6"))
 TEAMS_FILE = os.environ.get("TEAMS_FILE", "/data/teams.json")
+USERS_FILE = os.environ.get("USERS_FILE", "/data/users.json")
 ESPN_API = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 ESPN_LEAGUES = ["esp.1", "uefa.champions", "esp.copa_del_rey", "esp.supercopa", "fifa.cwc", "uefa.super_cup"]
 
@@ -106,9 +107,12 @@ MAIN_KEYBOARD = {"keyboard": [
 ], "resize_keyboard": True, "one_time_keyboard": False}
 
 
-def send_telegram(text, reply_markup=None):
+_active_chat = threading.local()
+
+def send_telegram(text, reply_markup=None, chat_id=None):
     log(f"TG: {text[:80]}")
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
+    target = chat_id or getattr(_active_chat, "id", None) or TELEGRAM_CHAT_ID
+    data = {"chat_id": target, "text": text, "parse_mode": "HTML"}
     if reply_markup:
         data["reply_markup"] = reply_markup
     elif any(u.get("waiting_query") for u in state.user_state.values()):
@@ -499,15 +503,66 @@ def ensure_in_radarr(release):
 def handle_bot_message(msg):
     """Handle incoming Telegram text messages."""
     chat_id = str(msg.get("chat", {}).get("id", ""))
-    if chat_id != TELEGRAM_CHAT_ID:
-        return
+    _active_chat.id = chat_id  # Route send_telegram to this user
     text = msg.get("text", "").strip()
     if not text:
         return
 
+    # Authorization check
+    if not _is_authorized(chat_id):
+        # Allow /start to show info but don't grant access
+        if text == "/start":
+            user_name = msg.get("from", {}).get("first_name", "?")
+            tg("sendMessage", {"chat_id": chat_id, "text": f"🔒 У вас нет доступа.\nВаш ID: {chat_id}\nПопросите админа добавить вас."})
+            # Notify admin about access attempt
+            send_telegram(f"🔔 Запрос доступа от <b>{user_name}</b> (ID: {chat_id})\n/adduser {chat_id} {user_name}")
+        return
+
+    is_admin = _is_admin(chat_id)
+
+    # Admin commands
+    if text.startswith("/adduser") and is_admin:
+        parts = text.split(maxsplit=2)
+        if len(parts) >= 2:
+            new_id = parts[1]
+            new_name = parts[2] if len(parts) > 2 else "user"
+            users = _load_users()
+            users[new_id] = {"name": new_name, "role": "user"}
+            _save_users(users)
+            send_telegram(f"✅ Пользователь добавлен: {new_name} (ID: {new_id})")
+            tg("sendMessage", {"chat_id": new_id, "text": "✅ Вам предоставлен доступ к Media Hub!\nНажмите /start",
+                "reply_markup": MAIN_KEYBOARD})
+        else:
+            send_telegram("Формат: /adduser ID имя")
+        return
+
+    if text.startswith("/removeuser") and is_admin:
+        parts = text.split(maxsplit=1)
+        if len(parts) >= 2:
+            del_id = parts[1]
+            users = _load_users()
+            removed = users.pop(del_id, None)
+            _save_users(users)
+            if removed:
+                send_telegram(f"🗑 Удалён: {removed.get('name', del_id)}")
+                tg("sendMessage", {"chat_id": del_id, "text": "🔒 Ваш доступ отозван."})
+            else:
+                send_telegram(f"❌ Пользователь {del_id} не найден")
+        return
+
+    if text == "/users" and is_admin:
+        users = _load_users()
+        lines = ["👥 <b>Пользователи:</b>\n"]
+        for uid, info in users.items():
+            role = "👑" if info.get("role") == "admin" else "👤"
+            lines.append(f"  {role} {info.get('name','?')} — <code>{uid}</code>")
+        send_telegram("\n".join(lines))
+        return
+
     # Commands
     if text in ("/start", "/help"):
-        send_telegram("🎬 <b>Media Hub Bot</b>\n\nИспользуй кнопки внизу для управления.\n🔍 Поиск — найти и скачать\n📊 Статус — что качается\n📋 Список — что мониторится")
+        role_text = " (админ)" if is_admin else ""
+        send_telegram(f"🎬 <b>Media Hub Bot</b>{role_text}\n\n🔍 Поиск — найти и скачать\n📊 Статус — что качается\n📋 Список — что мониторится\n⚽ Матчи — расписание")
         return
 
     if text in ("🔍 Поиск", "/search"):
@@ -562,8 +617,10 @@ def handle_callback(callback):
     msg = callback.get("message", {})
     chat_id = str(msg.get("chat", {}).get("id", ""))
 
-    if chat_id != TELEGRAM_CHAT_ID:
-        answer_callback(cb_id)
+    _active_chat.id = chat_id  # Route send_telegram to this user
+
+    if not _is_authorized(chat_id):
+        answer_callback(cb_id, "🔒 Нет доступа")
         return
 
     # Search type selected
@@ -576,8 +633,11 @@ def handle_callback(callback):
         state.user_state[chat_id] = {"waiting_query": search_type}
         return
 
-    # Cancel all downloads
+    # Cancel all downloads (admin only)
     if data == "cancel_all_dl":
+        if not _is_admin(chat_id):
+            answer_callback(cb_id, "🔒 Только для админа")
+            return
         answer_callback(cb_id, "Останавливаю все загрузки...")
         edit_message(msg.get("message_id"), "🛑 Останавливаю все загрузки...")
         threading.Thread(target=do_cancel_all_downloads, daemon=True).start()
@@ -612,8 +672,11 @@ def handle_callback(callback):
         state.user_state[chat_id] = {"waiting_query": "add_team"}
         return
 
-    # Cancel single download
+    # Cancel single download (admin only)
     if data.startswith("cancel_dl:"):
+        if not _is_admin(chat_id):
+            answer_callback(cb_id, "🔒 Только для админа")
+            return
         hash_prefix = data.split(":", 1)[1]
         answer_callback(cb_id, "Останавливаю...")
         edit_message(msg.get("message_id"), "🛑 Останавливаю загрузку...")
@@ -723,6 +786,39 @@ def do_grab_silent(release):
 
 
 # ── Teams tracking (TheSportsDB) ─────────────────────────────────────────
+
+# ── User access control ──────────────────────────────────────────────────
+
+def _load_users():
+    """Load authorized users. Returns dict {chat_id: {"name": ..., "role": "admin"|"user"}}."""
+    try:
+        with open(USERS_FILE, "r") as f:
+            return json.loads(f.read())
+    except Exception:
+        # First run: admin is TELEGRAM_CHAT_ID
+        return {TELEGRAM_CHAT_ID: {"name": "admin", "role": "admin"}} if TELEGRAM_CHAT_ID else {}
+
+
+def _save_users(users):
+    try:
+        os.makedirs(os.path.dirname(USERS_FILE), exist_ok=True)
+        with open(USERS_FILE, "w") as f:
+            f.write(json.dumps(users, ensure_ascii=False, indent=2))
+    except Exception as e:
+        log(f"Save users error: {e}")
+
+
+def _is_authorized(chat_id):
+    """Check if chat_id is authorized (admin or user)."""
+    users = _load_users()
+    return chat_id in users
+
+
+def _is_admin(chat_id):
+    """Check if chat_id is admin."""
+    users = _load_users()
+    return users.get(chat_id, {}).get("role") == "admin"
+
 
 def _load_teams():
     """Load tracked teams from JSON file."""
