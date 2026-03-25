@@ -103,7 +103,7 @@ def tg(method, data=None):
 
 MAIN_KEYBOARD = {"keyboard": [
     ["🔍 Поиск", "📊 Статус"],
-    ["📋 Список", "⚽ Матчи"],
+    ["📡 Монитор", "⚽ Матчи"],
 ], "resize_keyboard": True, "one_time_keyboard": False}
 
 
@@ -614,7 +614,7 @@ def handle_bot_message(msg):
         show_status()
         return
 
-    if text in ("📋 Список", "/list"):
+    if text in ("📡 Монитор", "📋 Список", "/list"):
         show_list()
         return
 
@@ -1414,34 +1414,38 @@ def show_matches():
 
 
 def show_list():
-    lines = ["📋 <b>Мониторинг</b>\n"]
+    """Show only actively monitored content that needs attention."""
+    lines = ["📡 <b>Монитор</b>\n"]
 
-    # Fresh data from APIs
     movies = api_get(f"{RADARR_URL}/api/v3/movie", RADARR_KEY) or []
     series = api_get(f"{SONARR_URL}/api/v3/series", SONARR_KEY) or []
 
-    done_movies, waiting_movies, searching_movies = [], [], []
-    done_series, active_series = [], []
+    has_any = False
 
-    for m in movies:
-        if not m.get("monitored"):
-            continue
-        title = m.get("title", "?")
-        year = m.get("year", "")
-        label = f"{title} ({year})" if year else title
-        if m.get("hasFile"):
-            done_movies.append(label)
-        elif m.get("status") in ("announced", "inCinemas"):
+    # Movies waiting for release
+    waiting = [m for m in movies if m.get("monitored") and not m.get("hasFile")
+               and m.get("status") in ("announced", "inCinemas")]
+    if waiting:
+        has_any = True
+        lines.append("<b>⏳ Ожидаем выхода:</b>")
+        for m in waiting:
             st = "анонсирован" if m["status"] == "announced" else "в кинотеатрах"
-            waiting_movies.append(f"{label} — {st}")
-        elif m.get("status") == "released":
-            searching_movies.append(label)
+            lines.append(f"  • {m['title']} ({m.get('year','')}) — {st}")
 
+    # Movies searching for release
+    searching = [m for m in movies if m.get("monitored") and not m.get("hasFile")
+                 and m.get("status") == "released"]
+    if searching:
+        has_any = True
+        lines.append("\n<b>🔍 Ищем релизы:</b>")
+        for m in searching:
+            lines.append(f"  • {m['title']} ({m.get('year','')})")
+
+    # Series: only continuing (waiting for new episodes) or incomplete
     for s in series:
         if not s.get("monitored"):
             continue
         title = s.get("title", "?")
-        # Count only monitored seasons (skip Season 0 specials)
         monitored_total = 0
         monitored_files = 0
         for season in s.get("seasons", []):
@@ -1449,47 +1453,19 @@ def show_list():
                 ss = season.get("statistics", {})
                 monitored_total += ss.get("totalEpisodeCount", 0)
                 monitored_files += ss.get("episodeFileCount", 0)
-
         if monitored_total == 0:
             continue
 
-        if monitored_files >= monitored_total and s.get("status") == "continuing":
-            active_series.append(f"{title} ({monitored_files}/{monitored_total} серий) — ждём новых")
-        elif monitored_files >= monitored_total:
-            done_series.append(f"{title} ({monitored_files} серий)")
-        else:
-            active_series.append(f"{title} ({monitored_files}/{monitored_total} серий)")
-
-    has_any = False
-
-    if waiting_movies:
-        has_any = True
-        lines.append("<b>⏳ Ожидаем выхода:</b>")
-        for m in waiting_movies:
-            lines.append(f"  • {m}")
-
-    if searching_movies:
-        has_any = True
-        lines.append("\n<b>🔍 Ищем релизы:</b>")
-        for m in searching_movies:
-            lines.append(f"  • {m}")
-
-    if active_series:
-        has_any = True
-        lines.append("\n<b>📺 Сериалы:</b>")
-        for s in active_series:
-            lines.append(f"  • {s}")
-
-    if done_movies or done_series:
-        has_any = True
-        lines.append("\n<b>✅ Скачано:</b>")
-        for m in done_movies:
-            lines.append(f"  🎬 {m}")
-        for s in done_series:
-            lines.append(f"  📺 {s}")
+        # Only show if: incomplete OR continuing (new episodes expected)
+        if monitored_files < monitored_total:
+            has_any = True
+            lines.append(f"\n<b>📺 {title}</b> ({monitored_files}/{monitored_total} серий)")
+        elif s.get("status") == "continuing":
+            has_any = True
+            lines.append(f"\n<b>📺 {title}</b> — ждём новых серий ({monitored_files} скачано)")
 
     if not has_any:
-        lines.append("Пусто — добавьте что-нибудь через Поиск")
+        lines.append("Всё скачано, ничего не отслеживается.\nДобавь что-нибудь через 🔍 Поиск")
 
     send_telegram("\n".join(lines))
 
@@ -1589,6 +1565,8 @@ def handle_jellyfin_webhook(data):
     tmdb = data.get("Provider_tmdb", "") or data.get("Item", {}).get("ProviderIds", {}).get("Tmdb", "")
     tvdb = data.get("Provider_tvdb", "") or data.get("Item", {}).get("ProviderIds", {}).get("Tvdb", "")
     name = data.get("Name", "?")
+    found = False
+
     if item_type == "Movie" and tmdb:
         try:
             tid = int(tmdb)
@@ -1599,9 +1577,10 @@ def handle_jellyfin_webhook(data):
                         api_delete(f"{RADARR_URL}/api/v3/movie/{m['id']}?deleteFiles=true", RADARR_KEY)
                         log(f"Deleted from Radarr: {name}")
                         _qb_delete_torrents(m.get("title", name))
-                        send_telegram(f"🗑 <b>Удалено:</b> {name}\nRadarr + торренты очищены")
-                        return
+                        found = True
+                        break
         except ValueError: pass
+
     elif item_type in ("Series", "Season", "Episode") and tvdb:
         try:
             tid = int(tvdb)
@@ -1612,9 +1591,16 @@ def handle_jellyfin_webhook(data):
                         api_delete(f"{SONARR_URL}/api/v3/series/{s['id']}?deleteFiles=true", SONARR_KEY)
                         log(f"Deleted from Sonarr: {name}")
                         _qb_delete_torrents(s.get("title", name))
-                        send_telegram(f"🗑 <b>Удалено:</b> {name}\nSonarr + торренты очищены")
-                        return
+                        found = True
+                        break
         except ValueError: pass
+
+    # Fallback: not found in Sonarr/Radarr — still clean up torrents by name
+    if not found and name and name != "?":
+        _qb_delete_torrents(name)
+        log(f"Jellyfin delete fallback: cleaned torrents for '{name}'")
+
+    send_telegram(f"🗑 <b>Удалено:</b> {name}")
 
 
 def handle_prowlarr_webhook(data):
