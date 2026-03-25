@@ -307,38 +307,40 @@ def _lookup_overview(title):
     if not search:
         return None, None, None, None
 
-    year_match = re.search(r'\b((?:19|20)\d{2})\b', title)
-    year = int(year_match.group(1)) if year_match else None
+    # Extract year(s) from torrent title
+    year_matches = re.findall(r'\b((?:19|20)\d{2})\b', title)
+    years = [int(y) for y in year_matches] if year_matches else []
     q = urllib.parse.quote(search)
 
-    # Try Sonarr (series)
+    # Sonarr/Radarr search already handles cross-language matching (TVDB/TMDB),
+    # so "Триггер" → finds "Trigger". We trust the search relevance and
+    # disambiguate only by year.
+
     sonarr_hits = api_get(f"{SONARR_URL}/api/v3/series/lookup?term={q}", SONARR_KEY, timeout=10) or []
-    for s in sonarr_hits[:5]:
-        s_year = s.get("year", 0)
-        year_ok = not year or abs(s_year - year) <= 1
-        if year_ok and _titles_match(search, s):
-            overview = s.get("overview", "")
-            if overview:
-                return overview[:300], s.get("title"), s_year, "series"
-
-    # Try Radarr (movies)
     radarr_hits = api_get(f"{RADARR_URL}/api/v3/movie/lookup?term={q}", RADARR_KEY, timeout=10) or []
-    for m in radarr_hits[:5]:
-        m_year = m.get("year", 0)
-        year_ok = not year or abs(m_year - year) <= 1
-        if year_ok and _titles_match(search, m):
-            overview = m.get("overview", "")
-            if overview:
-                return overview[:300], m.get("title"), m_year, "movie"
 
-    # Fallback: if first result has exact year match, trust it
-    if year:
-        if sonarr_hits and sonarr_hits[0].get("year") == year and sonarr_hits[0].get("overview"):
-            s = sonarr_hits[0]
-            return s["overview"][:300], s.get("title"), year, "series"
-        if radarr_hits and radarr_hits[0].get("year") == year and radarr_hits[0].get("overview"):
-            m = radarr_hits[0]
-            return m["overview"][:300], m.get("title"), year, "movie"
+    if years:
+        # Have year(s) — find best match by year
+        # For series: first year in title is usually the start year
+        # For "2018-2024", check both
+        for s in sonarr_hits[:5]:
+            s_year = s.get("year", 0)
+            if s_year in years or any(abs(s_year - y) <= 1 for y in years):
+                if s.get("overview"):
+                    return s["overview"][:300], s.get("title"), s_year, "series"
+        for m in radarr_hits[:5]:
+            m_year = m.get("year", 0)
+            if m_year in years or any(abs(m_year - y) <= 1 for y in years):
+                if m.get("overview"):
+                    return m["overview"][:300], m.get("title"), m_year, "movie"
+    else:
+        # No year — take first result only if title matches closely
+        for s in sonarr_hits[:2]:
+            if _titles_match(search, s) and s.get("overview"):
+                return s["overview"][:300], s.get("title"), s.get("year", 0), "series"
+        for m in radarr_hits[:2]:
+            if _titles_match(search, m) and m.get("overview"):
+                return m["overview"][:300], m.get("title"), m.get("year", 0), "movie"
 
     return None, None, None, None
 
