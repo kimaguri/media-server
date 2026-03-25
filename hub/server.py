@@ -240,6 +240,79 @@ def prowlarr_search(query):
 RESULTS_PER_PAGE = 5
 
 
+def _parse_release_tags(title):
+    """Extract quality, audio, subtitle info from release title."""
+    tags = []
+    t = title
+
+    # Quality
+    for q in ("2160p", "1080p", "720p", "480p"):
+        if q in t:
+            tags.append(f"📹 {q}")
+            break
+
+    # Source
+    for s in ("WEB-DL", "WEBRip", "BluRay", "BDRip", "BD", "HDTV", "DVDRip"):
+        if s.lower() in t.lower():
+            tags.append(s)
+            break
+
+    # Audio/language
+    audio = []
+    if re.search(r'RUS|русск|многоголос|дубляж|озвучк', t, re.IGNORECASE): audio.append("RUS")
+    if re.search(r'ENG|англ', t, re.IGNORECASE): audio.append("ENG")
+    if re.search(r'JPN|japan|日本', t, re.IGNORECASE): audio.append("JPN")
+    if re.search(r'Dual[\s-]?Audio|DUAL', t, re.IGNORECASE): audio.append("DUAL")
+    if audio:
+        tags.append(f"🔊 {' '.join(audio)}")
+
+    # Subtitles
+    if re.search(r'SUB|субт|Multi-?Subs', t, re.IGNORECASE):
+        tags.append("💬 SUB")
+
+    # Season/episode info
+    sm = re.search(r'S(\d+)', t, re.IGNORECASE)
+    em = re.search(r'(\d+)\s*серий|\((\d+)\s*сер', t, re.IGNORECASE)
+    season_m = re.search(r'[Сс]езон\s*([\d\-]+)', t)
+    if season_m:
+        tags.append(f"📦 Сезон {season_m.group(1)}")
+    elif sm:
+        tags.append(f"📦 S{sm.group(1)}")
+    if em:
+        num = em.group(1) or em.group(2)
+        tags.append(f"📦 {num} серий")
+
+    return " • ".join(tags) if tags else ""
+
+
+def _format_release_detail(release):
+    """Full detail view for a single release."""
+    title = release.get("title", "?")
+    size = fmt_size(release.get("size", 0))
+    seeders = release.get("seeders", 0)
+    leechers = release.get("leechers", 0)
+    grabs = release.get("grabs", 0)
+    indexer = release.get("indexer", "?")
+    pub = (release.get("publishDate") or "?")[:10]
+    age_days = release.get("age", 0)
+    flags = release.get("indexerFlags", [])
+
+    lines = [f"ℹ️ <b>Подробности</b>\n"]
+    lines.append(f"📦 {title}\n")
+    lines.append(f"🌐 {indexer} • 📅 {pub} ({age_days}д. назад)")
+    lines.append(f"🌱 {seeders} сидов • 👥 {leechers} личеров • 📥 {grabs} скачиваний")
+    lines.append(f"💾 {size}")
+
+    if flags:
+        lines.append(f"🏷 {', '.join(flags)}")
+
+    tags = _parse_release_tags(title)
+    if tags:
+        lines.append(f"\n{tags}")
+
+    return "\n".join(lines)
+
+
 def send_search_results(query, results, callback_prefix, page=0, message_id=None):
     """Send search results with pagination and numbered download buttons."""
     if not results:
@@ -261,7 +334,7 @@ def send_search_results(query, results, callback_prefix, page=0, message_id=None
 
     lines = [f"🔍 <b>{query}</b>"]
     if total_pages > 1:
-        lines[0] += f" (стр. {page + 1}/{total_pages})"
+        lines[0] += f" (стр. {page + 1}/{total_pages}, всего {total})"
     lines.append("")
 
     for i, r in enumerate(page_items):
@@ -271,15 +344,26 @@ def send_search_results(query, results, callback_prefix, page=0, message_id=None
         seeders = r.get("seeders", 0)
         icon = "🟢" if seeders >= 10 else "🟡" if seeders >= 3 else "🔴"
         num = start + i + 1
-        lines.append(f"{icon} <b>{num}.</b> {size} 🌱{seeders} <i>{idx}</i>\n{title}\n")
+        tags = _parse_release_tags(title)
+        lines.append(f"{icon} <b>{num}.</b> {size} 🌱{seeders} <i>{idx}</i>\n{title}")
+        if tags:
+            lines.append(f"    {tags}")
+        lines.append("")
 
     buttons = []
     # Download buttons — numbers in one row
-    num_row = []
+    dl_row = []
     for i in range(len(page_items)):
         num = start + i
-        num_row.append({"text": f"⬇️ {num + 1}", "callback_data": f"{callback_prefix}:{num}"})
-    buttons.append(num_row)
+        dl_row.append({"text": f"⬇️ {num + 1}", "callback_data": f"{callback_prefix}:{num}"})
+    buttons.append(dl_row)
+
+    # Info buttons — same row
+    info_row = []
+    for i in range(len(page_items)):
+        num = start + i
+        info_row.append({"text": f"ℹ️ {num + 1}", "callback_data": f"{callback_prefix}:info:{num}"})
+    buttons.append(info_row)
 
     # Navigation — separate row, full-width buttons
     nav_row = []
@@ -710,7 +794,7 @@ def handle_callback(callback):
 
     # Release selection from search results
     if ":" in data:
-        # Handle pagination: prefix:page:N
+        # Handle pagination and info: prefix:page:N or prefix:info:N
         parts = data.split(":")
         if len(parts) == 3 and parts[-2] == "page":
             prefix = parts[0]
@@ -721,6 +805,26 @@ def handle_callback(callback):
                     query = state.search_results.get(f"{prefix}_query", "")
                     send_search_results(query, state.search_results[prefix], prefix,
                                         page=page, message_id=msg.get("message_id"))
+                except (ValueError, IndexError):
+                    pass
+                return
+
+        if len(parts) == 3 and parts[-2] == "info":
+            prefix = parts[0]
+            if prefix in state.search_results:
+                try:
+                    idx = int(parts[-1])
+                    releases = state.search_results[prefix]
+                    if 0 <= idx < len(releases):
+                        answer_callback(cb_id)
+                        detail = _format_release_detail(releases[idx])
+                        # Show detail with back + download buttons
+                        page = idx // RESULTS_PER_PAGE
+                        buttons = [
+                            [{"text": f"⬇️ Скачать", "callback_data": f"{prefix}:{idx}"}],
+                            [{"text": "← К списку", "callback_data": f"{prefix}:page:{page}"}],
+                        ]
+                        edit_message(msg.get("message_id"), detail, reply_markup={"inline_keyboard": buttons})
                 except (ValueError, IndexError):
                     pass
                 return
