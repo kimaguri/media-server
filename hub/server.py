@@ -767,10 +767,31 @@ def _fix_prowlarr_torrent_category(release, expected_cat):
         log(f"Fix category error: {e}")
 
 
+def _smart_type(release, user_type):
+    """Determine content type: trust user's choice but correct obvious mistakes."""
+    title = release.get("title", "")
+    auto = classify_release(release)
+
+    if not user_type or user_type == "all":
+        return auto
+
+    # User said "movie" but title has season/episode → it's a series
+    if user_type == "movie" and re.search(r'S\d+E?\d*|Season\s*\d+|\(\d+\s*сер', title, re.IGNORECASE):
+        log(f"Type correction: user said movie, but '{title[:40]}' looks like series")
+        return "series"
+
+    # User said "series" but auto-detected as movie (no season pattern, Movies category)
+    if user_type == "series" and auto == "movie" and not re.search(r'S\d+|Season|сер|сезон', title, re.IGNORECASE):
+        log(f"Type correction: user said series, but '{title[:40]}' looks like movie")
+        return "movie"
+
+    # Otherwise trust user
+    return user_type
+
+
 def do_grab_silent(release, user_type=None):
-    """Route release through Sonarr/Radarr for proper import, or Prowlarr for sports.
-    user_type overrides classify_release when the user explicitly chose a category."""
-    rtype = user_type or classify_release(release)
+    """Route release through Sonarr/Radarr for proper import, or Prowlarr for sports."""
+    rtype = _smart_type(release, user_type)
     title = release.get("title", "?")[:60]
 
     if rtype == "movie":
