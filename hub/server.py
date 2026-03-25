@@ -285,6 +285,21 @@ def _parse_release_tags(title):
     return " • ".join(tags) if tags else ""
 
 
+def _titles_match(search, item):
+    """Check if search term matches any title of the item (including alternates)."""
+    s = search.lower()
+    # Check main title
+    main = (item.get("title") or "").lower()
+    if s in main or main in s:
+        return True
+    # Check alternate titles (includes Russian, original, etc.)
+    for alt in item.get("alternateTitles", []):
+        alt_title = (alt.get("title") or "").lower()
+        if s in alt_title or alt_title in s:
+            return True
+    return False
+
+
 def _lookup_overview(title):
     """Lookup description from Sonarr/Radarr (TMDB/TVDB data).
     Returns (overview, media_title, year, media_type) or (None, ...) if not confident."""
@@ -296,28 +311,34 @@ def _lookup_overview(title):
     year = int(year_match.group(1)) if year_match else None
     q = urllib.parse.quote(search)
 
-    # Try Sonarr first (series)
+    # Try Sonarr (series)
     sonarr_hits = api_get(f"{SONARR_URL}/api/v3/series/lookup?term={q}", SONARR_KEY, timeout=10) or []
-    for s in sonarr_hits[:3]:
-        s_title = s.get("title", "").lower()
+    for s in sonarr_hits[:5]:
         s_year = s.get("year", 0)
-        # Require: name matches AND (year matches OR no year in torrent title)
-        if search.lower() in s_title or s_title in search.lower():
-            if not year or abs(s_year - year) <= 1:
-                overview = s.get("overview", "")
-                if overview:
-                    return overview[:300], s.get("title"), s_year, "series"
+        year_ok = not year or abs(s_year - year) <= 1
+        if year_ok and _titles_match(search, s):
+            overview = s.get("overview", "")
+            if overview:
+                return overview[:300], s.get("title"), s_year, "series"
 
     # Try Radarr (movies)
     radarr_hits = api_get(f"{RADARR_URL}/api/v3/movie/lookup?term={q}", RADARR_KEY, timeout=10) or []
-    for m in radarr_hits[:3]:
-        m_title = m.get("title", "").lower()
+    for m in radarr_hits[:5]:
         m_year = m.get("year", 0)
-        if search.lower() in m_title or m_title in search.lower():
-            if not year or abs(m_year - year) <= 1:
-                overview = m.get("overview", "")
-                if overview:
-                    return overview[:300], m.get("title"), m_year, "movie"
+        year_ok = not year or abs(m_year - year) <= 1
+        if year_ok and _titles_match(search, m):
+            overview = m.get("overview", "")
+            if overview:
+                return overview[:300], m.get("title"), m_year, "movie"
+
+    # Fallback: if first result has exact year match, trust it
+    if year:
+        if sonarr_hits and sonarr_hits[0].get("year") == year and sonarr_hits[0].get("overview"):
+            s = sonarr_hits[0]
+            return s["overview"][:300], s.get("title"), year, "series"
+        if radarr_hits and radarr_hits[0].get("year") == year and radarr_hits[0].get("overview"):
+            m = radarr_hits[0]
+            return m["overview"][:300], m.get("title"), year, "movie"
 
     return None, None, None, None
 
