@@ -506,12 +506,43 @@ def push_to_prowlarr(release):
 
 
 def _clean_search_term(title):
-    """Extract clean search term from release title."""
-    search = title.split("[")[0].split("(")[0].strip()
-    search = re.sub(r'S\d+E?\d*', '', search, flags=re.IGNORECASE)
-    search = re.sub(r'\b(1080p|720p|480p|2160p|WEB|BD|HEVC|AVC|AAC|DUAL|DDP|H\.?\d+|WEB-DL|WEB-DLRip|BluRay|REMUX)\b', '', search, flags=re.IGNORECASE)
-    search = re.sub(r'[-._]', ' ', search).strip()
+    """Extract clean search term from release title for API lookups."""
+    search = title
+
+    # Strip leading [GroupName] tags
+    search = re.sub(r'^\[[^\]]*\]\s*', '', search)
+
+    # Remove everything in brackets/parens (quality, year, etc.)
+    search = re.sub(r'\[[^\]]*\]', '', search)
+    search = re.sub(r'\([^)]*\)', '', search)
+
+    # "Name / English Name" → take first (usually original/Russian)
+    if " / " in search:
+        search = search.split(" / ")[0].strip()
+
+    # Replace dots/underscores with spaces early
+    search = re.sub(r'[._]', ' ', search)
+
+    # Remove everything after first quality/codec marker (the rest is always junk)
+    search = re.split(
+        r'\b(?:1080p|720p|480p|2160p|WEB[\s-]?DL|WEBRip|BluRay|BDRip|HDRip|DVDRip|REMUX|HDTV)\b',
+        search, maxsplit=1, flags=re.IGNORECASE
+    )[0]
+
+    # Remove season/episode patterns
+    search = re.sub(r'\bS\d+E?\d*\b', '', search, flags=re.IGNORECASE)
+    search = re.sub(r'\bE\d+[\s-]*\d*\s*(of|из)\s*\d+', '', search, flags=re.IGNORECASE)
+    search = re.sub(r'\b\d+\s*(of|из)\s*\d+\b', '', search, flags=re.IGNORECASE)
+    search = re.sub(r'\b(сезон|season)\s*\d+', '', search, flags=re.IGNORECASE)
+
+    # Remove years
+    search = re.sub(r'\b(19|20)\d{2}\b', '', search)
+    # Remove remaining dashes, commas
+    search = re.sub(r'[-,]', ' ', search)
+    # Clean up whitespace
     search = re.sub(r'\s+', ' ', search).strip()
+    search = search.rstrip('- ')
+
     return search
 
 
