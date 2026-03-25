@@ -691,6 +691,7 @@ def handle_callback(callback):
                 answer_callback(cb_id, "Отменено")
                 edit_message(msg.get("message_id"), "❌ Отменено")
                 state.search_results.pop(prefix, None)
+                state.search_results.pop(f"{prefix}_type", None)
                 state.user_state.pop(chat_id, None)
                 send_telegram("👌")  # Triggers main keyboard
                 return
@@ -706,7 +707,9 @@ def handle_callback(callback):
                     # Edit original message to show selection (no duplicate notification)
                     edit_message(msg.get("message_id"),
                         f"✅ Выбрано: {rel.get('title','?')[:60]}\n{fmt_size(rel.get('size',0))} • {rel.get('indexer','?')}")
-                    threading.Thread(target=do_grab_silent, args=(rel,), daemon=True).start()
+                    # Pass the search_type so we don't re-classify
+                    user_type = state.search_results.pop(f"{prefix}_type", None)
+                    threading.Thread(target=do_grab_silent, args=(rel, user_type), daemon=True).start()
                     return
             except (ValueError, IndexError):
                 pass
@@ -725,15 +728,20 @@ def do_search(query, search_type):
         )]
     elif search_type == "series":
         results = [r for r in results if any(
-            c.get("name", "").startswith("TV") for c in r.get("categories", [])
+            c.get("name", "").startswith("TV") or "Anime" in c.get("name", "")
+            for c in r.get("categories", [])
         )]
     elif search_type == "sport":
         results = [r for r in results if any(
             "Sport" in c.get("name", "") for c in r.get("categories", [])
         )]
-    # "all" — no filter
+    # If filter removed everything, show unfiltered (user chose this type, trust them)
+    if not results and search_type != "all":
+        results = prowlarr_search(query)
 
     prefix = f"sr_{int(time.time())}"
+    # Store search_type with the results so do_grab_silent knows the user's intent
+    state.search_results[f"{prefix}_type"] = search_type
     send_search_results(query, results, prefix)
 
 
@@ -759,9 +767,10 @@ def _fix_prowlarr_torrent_category(release, expected_cat):
         log(f"Fix category error: {e}")
 
 
-def do_grab_silent(release):
-    """Route release through Sonarr/Radarr for proper import, or Prowlarr for sports."""
-    rtype = classify_release(release)
+def do_grab_silent(release, user_type=None):
+    """Route release through Sonarr/Radarr for proper import, or Prowlarr for sports.
+    user_type overrides classify_release when the user explicitly chose a category."""
+    rtype = user_type or classify_release(release)
     title = release.get("title", "?")[:60]
 
     if rtype == "movie":
