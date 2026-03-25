@@ -562,15 +562,12 @@ def handle_bot_message(msg):
     # Commands
     if text in ("/start", "/help"):
         role_text = " (админ)" if is_admin else ""
-        send_telegram(f"🎬 <b>Media Hub Bot</b>{role_text}\n\n🔍 Поиск — найти и скачать\n📊 Статус — что качается\n📋 Список — что мониторится\n⚽ Матчи — расписание")
+        send_telegram(f"🎬 <b>Media Hub Bot</b>{role_text}\n\n🔍 Поиск — найти и скачать (фильм или сериал определится автоматически)\n📊 Статус — что качается\n📋 Список — что мониторится\n⚽ Матчи — расписание спорта\n\nИли просто напиши название — бот найдёт.")
         return
 
     if text in ("🔍 Поиск", "/search"):
-        send_telegram("Что ищем?", {"inline_keyboard": [
-            [{"text": "🎬 Фильм", "callback_data": "type:movie"},
-             {"text": "📺 Сериал", "callback_data": "type:series"},
-             {"text": "⚽ Матч", "callback_data": "type:sport"}],
-        ]})
+        send_telegram("Введите название фильма или сериала:", {"keyboard": [["❌ Отмена"]], "resize_keyboard": True})
+        state.user_state[chat_id] = {"waiting_query": "media"}
         return
 
     if text == "❌ Отмена":
@@ -602,12 +599,8 @@ def handle_bot_message(msg):
             threading.Thread(target=do_search, args=(text, search_type), daemon=True).start()
         return
 
-    # No free-text search — always require category selection
-    send_telegram("Сначала выбери категорию:", {"inline_keyboard": [
-        [{"text": "🎬 Фильм", "callback_data": "type:movie"},
-         {"text": "📺 Сериал", "callback_data": "type:series"},
-         {"text": "⚽ Матч", "callback_data": "type:sport"}],
-    ]})
+    # Free text → search media (auto-detect movie vs series)
+    threading.Thread(target=do_search, args=(text, "media"), daemon=True).start()
 
 
 def handle_callback(callback):
@@ -623,14 +616,11 @@ def handle_callback(callback):
         answer_callback(cb_id, "🔒 Нет доступа")
         return
 
-    # Search type selected
-    if data.startswith("type:"):
-        search_type = data.split(":")[1]
-        labels = {"movie": "фильма", "series": "сериала", "sport": "матча"}
+    # Sport search type selected
+    if data == "type:sport":
         answer_callback(cb_id)
-        label = labels.get(search_type, "")
-        send_telegram(f"Введите название {label}:", {"keyboard": [["❌ Отмена"]], "resize_keyboard": True})
-        state.user_state[chat_id] = {"waiting_query": search_type}
+        send_telegram("Введите название матча:", {"keyboard": [["❌ Отмена"]], "resize_keyboard": True})
+        state.user_state[chat_id] = {"waiting_query": "sport"}
         return
 
     # Cancel all downloads (admin only)
@@ -722,22 +712,15 @@ def do_search(query, search_type):
     results = prowlarr_search(query)
 
     # Filter by type
-    if search_type == "movie":
-        results = [r for r in results if any(
-            c.get("name", "").startswith("Movies") for c in r.get("categories", [])
-        )]
-    elif search_type == "series":
-        results = [r for r in results if any(
-            c.get("name", "").startswith("TV") or "Anime" in c.get("name", "")
-            for c in r.get("categories", [])
-        )]
+    if search_type == "media":
+        # Movies + TV + Anime — exclude only Sport
+        results = [r for r in results if not any(
+            "Sport" in c.get("name", "") for c in r.get("categories", [])
+        )] or results  # Fallback to all if filter removes everything
     elif search_type == "sport":
         results = [r for r in results if any(
             "Sport" in c.get("name", "") for c in r.get("categories", [])
-        )]
-    # If filter removed everything, show unfiltered (user chose this type, trust them)
-    if not results and search_type != "all":
-        results = prowlarr_search(query)
+        )] or results
 
     prefix = f"sr_{int(time.time())}"
     # Store search_type with the results so do_grab_silent knows the user's intent
@@ -768,25 +751,70 @@ def _fix_prowlarr_torrent_category(release, expected_cat):
 
 
 def _smart_type(release, user_type):
-    """Determine content type: trust user's choice but correct obvious mistakes."""
+    """Auto-detect content type: series vs movie vs sport.
+    Uses title patterns, indexer categories, AND Sonarr/Radarr database lookups."""
     title = release.get("title", "")
     auto = classify_release(release)
 
-    if not user_type or user_type == "all":
-        return auto
+    # Sport — trust user or auto
+    if user_type == "sport" or (not user_type and auto == "sport"):
+        return "sport"
 
-    # User said "movie" but title has season/episode → it's a series
-    if user_type == "movie" and re.search(r'S\d+E?\d*|Season\s*\d+|\(\d+\s*сер', title, re.IGNORECASE):
-        log(f"Type correction: user said movie, but '{title[:40]}' looks like series")
+    # 1. Strong series indicators in title
+    if re.search(r'S\d+E?\d*|Season\s*\d+|\(\d+\s*сер|\bсезон\b|\bсер\.\)|\bEpisode\s*\d', title, re.IGNORECASE):
         return "series"
 
-    # User said "series" but auto-detected as movie (no season pattern, Movies category)
-    if user_type == "series" and auto == "movie" and not re.search(r'S\d+|Season|сер|сезон', title, re.IGNORECASE):
-        log(f"Type correction: user said series, but '{title[:40]}' looks like movie")
+    # 2. Indexer categories (if clear)
+    if auto == "series":
+        return "series"
+    if auto == "movie":
         return "movie"
 
-    # Otherwise trust user
-    return user_type
+    # 3. Ambiguous — ask Sonarr and Radarr databases
+    search = _clean_search_term(title)
+    if not search:
+        return "movie"
+
+    # Extract year from title if present
+    year_match = re.search(r'\b((?:19|20)\d{2})\b', title)
+    year = int(year_match.group(1)) if year_match else None
+
+    q = urllib.parse.quote(search)
+    sonarr_hits = api_get(f"{SONARR_URL}/api/v3/series/lookup?term={q}", SONARR_KEY, timeout=10) or []
+    radarr_hits = api_get(f"{RADARR_URL}/api/v3/movie/lookup?term={q}", RADARR_KEY, timeout=10) or []
+
+    # Score matches by title similarity and year
+    def score(item, search_lower, year):
+        name = (item.get("title") or item.get("cleanTitle") or "").lower()
+        s = 0
+        if name == search_lower:
+            s += 10  # Exact match
+        elif search_lower in name or name in search_lower:
+            s += 5   # Partial match
+        if year and item.get("year") == year:
+            s += 8   # Year match
+        elif year and abs((item.get("year") or 0) - year) <= 1:
+            s += 3   # Close year
+        return s
+
+    search_lower = search.lower()
+    best_sonarr = max((score(s, search_lower, year) for s in sonarr_hits[:5]), default=0)
+    best_radarr = max((score(m, search_lower, year) for m in radarr_hits[:5]), default=0)
+
+    if best_sonarr > best_radarr:
+        log(f"Smart type: '{search}' → series (sonarr={best_sonarr} > radarr={best_radarr})")
+        return "series"
+    elif best_radarr > best_sonarr:
+        log(f"Smart type: '{search}' → movie (radarr={best_radarr} > sonarr={best_sonarr})")
+        return "movie"
+
+    # Tie or nothing found — check file count hints
+    # Multiple files in torrent name → likely series
+    if re.search(r'\b\d{2,}\s*из\s*\d{2,}|\b\d+\s*серий|\bcomplete\b', title, re.IGNORECASE):
+        return "series"
+
+    log(f"Smart type: '{search}' → movie (default, sonarr={best_sonarr} radarr={best_radarr})")
+    return "movie"
 
 
 def do_grab_silent(release, user_type=None):
@@ -1331,7 +1359,8 @@ def show_matches():
         buttons.append([{"text": f"🗑 {t['name'][:30]}", "callback_data": f"track_team:remove:{t['id']}"}])
 
     buttons.append([{"text": "➕ Добавить команду", "callback_data": "matches:add_team"}])
-    buttons.append([{"text": "🔄 Обновить", "callback_data": "matches:refresh"}])
+    buttons.append([{"text": "⚽ Найти матч", "callback_data": "type:sport"},
+                    {"text": "🔄 Обновить", "callback_data": "matches:refresh"}])
     send_telegram("\n".join(lines), reply_markup={"inline_keyboard": buttons})
 
 
