@@ -399,14 +399,14 @@ def send_search_results(query, results, callback_prefix, page=0, message_id=None
     dl_row = []
     for i in range(len(page_items)):
         num = start + i
-        dl_row.append({"text": f"⬇️ {num + 1}", "callback_data": f"{callback_prefix}:{num}"})
+        dl_row.append({"text": f"🟢 {num + 1}", "callback_data": f"{callback_prefix}:{num}"})
     buttons.append(dl_row)
 
     # Info buttons — same row
     info_row = []
     for i in range(len(page_items)):
         num = start + i
-        info_row.append({"text": f"ℹ️ {num + 1}", "callback_data": f"{callback_prefix}:info:{num}"})
+        info_row.append({"text": f"📋 {num + 1}", "callback_data": f"{callback_prefix}:info:{num}"})
     buttons.append(info_row)
 
     # Navigation — separate row, full-width buttons
@@ -862,15 +862,18 @@ def handle_callback(callback):
                     if 0 <= idx < len(releases):
                         answer_callback(cb_id)
                         detail = _format_release_detail(releases[idx])
-                        # Show detail with back + download buttons
                         page = idx // RESULTS_PER_PAGE
                         buttons = [
-                            [{"text": f"⬇️ Скачать", "callback_data": f"{prefix}:{idx}"}],
+                            [{"text": "🟢 Скачать", "callback_data": f"{prefix}:{idx}"}],
                             [{"text": "← К списку", "callback_data": f"{prefix}:page:{page}"}],
                         ]
                         edit_message(msg.get("message_id"), detail, reply_markup={"inline_keyboard": buttons})
-                except (ValueError, IndexError):
-                    pass
+                except Exception as e:
+                    log(f"Info button error: {e}")
+                    answer_callback(cb_id, "Ошибка")
+                return
+            else:
+                answer_callback(cb_id, "Результаты устарели, повторите поиск")
                 return
 
         prefix, action = data.rsplit(":", 1)
